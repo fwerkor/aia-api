@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -83,13 +84,27 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}
-		return nil
+		return settleNativeContributor(ctx, actualQuota)
 	}
 
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		if err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true); err != nil {
+			return err
+		}
 	}
+	return settleNativeContributor(ctx, actualQuota)
+}
+
+func settleNativeContributor(ctx *gin.Context, quota int) error {
+	requestID := ctx.GetString("aia_shared_reservation")
+	if requestID == "" {
+		return nil
+	}
+	if err := model.SharedSettleChannel(requestID, int64(quota)); err != nil {
+		return err
+	}
+	ctx.Set("aia_shared_reservation", "")
 	return nil
 }

@@ -1,21 +1,28 @@
 package model
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// Shared credits are micro-USD and never become ordinary wallet quota.
 type SharedProvider struct {
 	ID          uint    `json:"id" gorm:"primaryKey"`
 	Name        string  `json:"name"`
 	BaseURL     string  `json:"base_url"`
 	Model       string  `json:"model" gorm:"uniqueIndex"`
-	InputPrice  float64 `json:"input_price"` // USD per million tokens
+	InputPrice  float64 `json:"input_price"`
 	OutputPrice float64 `json:"output_price"`
 	MaxOutput   int     `json:"max_output"`
 	Enabled     bool    `json:"enabled"`
@@ -25,6 +32,7 @@ type SharedContribution struct {
 	ID            uint      `json:"id" gorm:"primaryKey"`
 	OwnerID       int       `json:"owner_id" gorm:"index"`
 	ProviderID    uint      `json:"provider_id" gorm:"index"`
+	ChannelID     int       `json:"channel_id" gorm:"index"`
 	Ciphertext    string    `json:"-" gorm:"type:text"`
 	Fingerprint   string    `json:"-" gorm:"uniqueIndex"`
 	KeyHint       string    `json:"key_hint"`
@@ -37,11 +45,7 @@ type SharedContribution struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-type SharedAccount struct {
-	UserID  int   `json:"user_id" gorm:"primaryKey"`
-	Balance int64 `json:"balance"`
-}
-
+// SharedCharge is only an idempotent allocation/reward log. users.quota is the one wallet.
 type SharedCharge struct {
 	ID             uint      `json:"id" gorm:"primaryKey"`
 	RequestID      string    `json:"request_id" gorm:"uniqueIndex"`
@@ -54,89 +58,159 @@ type SharedCharge struct {
 	CreatedAt      time.Time `json:"created_at" gorm:"index"`
 }
 
+var ErrSharedInsufficient = errors.New("contributed channel budget exhausted")
+
 func SharedMigrate() error {
-	return DB.AutoMigrate(&SharedProvider{}, &SharedContribution{}, &SharedAccount{}, &SharedCharge{})
+	return DB.AutoMigrate(&SharedProvider{}, &SharedContribution{}, &SharedCharge{})
 }
 
-var ErrSharedInsufficient = errors.New("shared credits exhausted or no eligible contribution")
+func SharedKeyMarker(id uint) string { return fmt.Sprintf("aia-shared:%d", id) }
 
-func SharedReserve(userID int, providerID uint, amount int64, requestID string) (*SharedContribution, error) {
-	if userID <= 0 || amount <= 0 || amount > 100000000 || requestID == "" {
-		return nil, fmt.Errorf("invalid reservation")
+func SharedIsChannel(channel *Channel) bool {
+	return channel != nil && strings.HasPrefix(channel.Key, "aia-shared:")
+}
+
+func SharedDecryptCredential(channelID int) (string, error) {
+	var contribution SharedContribution
+	if err := DB.Where("channel_id = ? AND enabled = ? AND ciphertext <> ?", channelID, true, "").First(&contribution).Error; err != nil {
+		return "", err
 	}
-	var selected SharedContribution
-	// Prefer other contributors when credits exist; allow zero-credit self use.
-	var balance SharedAccount
-	DB.Select("balance").Where("user_id = ?", userID).First(&balance)
-	ownRank := "0 ELSE 1"
-	if balance.Balance >= amount {
-		ownRank = "1 ELSE 0"
+	if contribution.CooldownUntil > time.Now().Unix() {
+		return "", ErrSharedInsufficient
 	}
-	var candidates []SharedContribution
-	if err := DB.Where("provider_id = ? AND enabled = ? AND cooldown_until <= ? AND ciphertext <> ?", providerID, true, time.Now().Unix(), "").
-		Order("CASE WHEN owner_id = " + fmt.Sprint(userID) + " THEN " + ownRank + " END, daily_used ASC, id").
-		Limit(100).Find(&candidates).Error; err != nil {
-		return nil, err
+	raw, err := hex.DecodeString(os.Getenv("AIA_SHARED_SECRET"))
+	if err != nil || len(raw) != 32 {
+		return "", errors.New("shared key encryption is not configured")
 	}
-	for _, candidate := range candidates {
-		err := DB.Transaction(func(tx *gorm.DB) error {
-			var key SharedContribution
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&key, candidate.ID).Error; err != nil {
-				return err
-			}
-			if !key.Enabled {
-				return ErrSharedInsufficient
-			}
-			today := time.Now().UTC().Format("2006-01-02")
-			if key.Day != today {
-				key.Day = today
-				key.DailyUsed = 0
-			}
-			if key.DailyLimit <= 0 || key.DailyUsed+key.Reserved+amount > key.DailyLimit {
-				return ErrSharedInsufficient
-			}
-			if key.OwnerID != userID {
-				if err := tx.FirstOrCreate(&SharedAccount{}, SharedAccount{UserID: userID}).Error; err != nil {
-					return err
-				}
-				res := tx.Model(&SharedAccount{}).Where("user_id = ? AND balance >= ?", userID, amount).
-					Update("balance", gorm.Expr("balance - ?", amount))
-				if res.Error != nil {
-					return res.Error
-				}
-				if res.RowsAffected != 1 {
-					return ErrSharedInsufficient
-				}
-			}
-			key.Reserved += amount
-			if err := tx.Save(&key).Error; err != nil {
-				return err
-			}
-			if err := tx.Create(&SharedCharge{
-				RequestID: requestID, ConsumerID: userID, OwnerID: key.OwnerID, ContributionID: key.ID,
-				Reserved: amount, Status: "reserved", CreatedAt: time.Now().UTC(),
-			}).Error; err != nil {
-				return err
-			}
-			selected = key
+	cipherData, err := base64.RawURLEncoding.DecodeString(contribution.Ciphertext)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(raw)
+	if err != nil {
+		return "", err
+	}
+	g, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(cipherData) < g.NonceSize() {
+		return "", errors.New("invalid encrypted shared key")
+	}
+	key, err := g.Open(nil, cipherData[:g.NonceSize()], cipherData[g.NonceSize():], nil)
+	return string(key), err
+}
+
+func SharedCreateContribution(item *SharedContribution, provider SharedProvider) error {
+	if item.OwnerID <= 0 || item.DailyLimit <= 0 || item.Ciphertext == "" {
+		return errors.New("invalid contribution")
+	}
+	base := provider.BaseURL
+	channel := &Channel{Type: constant.ChannelTypeOpenAI, Key: "aia-shared:pending",
+		Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Model, item.OwnerID),
+		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: provider.Model, Group: "default"}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(item).Error; err != nil {
+			return err
+		}
+		channel.Key = SharedKeyMarker(item.ID)
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		item.ChannelID = channel.Id
+		if err := tx.Model(item).Update("channel_id", channel.Id).Error; err != nil {
+			return err
+		}
+		return channel.AddAbilities(tx)
+	})
+	if err == nil {
+		InitChannelCache()
+	}
+	return err
+}
+
+func SharedSetEnabled(ownerID int, id uint, enabled bool, dailyLimit int64, revoke bool) error {
+	if ownerID <= 0 || dailyLimit <= 0 {
+		return errors.New("invalid contribution settings")
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var item SharedContribution
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_id = ?", id, ownerID).First(&item).Error; err != nil {
+			return err
+		}
+		if revoke && item.Reserved != 0 {
+			return ErrSharedInsufficient
+		}
+		if enabled && item.Ciphertext == "" {
+			return errors.New("revoked credentials cannot be reenabled")
+		}
+		fields := map[string]any{"enabled": enabled, "daily_limit": dailyLimit}
+		if revoke {
+			fields["ciphertext"] = ""
+			fields["fingerprint"] = fmt.Sprintf("revoked:%d", id)
+		}
+		if err := tx.Model(&SharedContribution{}).Where("id = ?", id).Updates(fields).Error; err != nil {
+			return err
+		}
+		status := common.ChannelStatusManuallyDisabled
+		if enabled {
+			status = common.ChannelStatusEnabled
+		}
+		if err := tx.Model(&Channel{}).Where("id = ?", item.ChannelID).Update("status", status).Error; err != nil {
+			return err
+		}
+		return tx.Model(&Ability{}).Where("channel_id = ?", item.ChannelID).Update("enabled", enabled).Error
+	})
+	if err == nil {
+		InitChannelCache()
+	}
+	return err
+}
+
+func SharedReserveChannel(channelID, userID int, requestID string, amount int64) (bool, error) {
+	if amount <= 0 || amount > int64(^uint(0)>>1) {
+		return false, errors.New("invalid budget")
+	}
+	var found bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var item SharedContribution
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_id = ?", channelID).First(&item).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
-		})
-		if err == nil {
-			return &selected, nil
 		}
-		if !errors.Is(err, ErrSharedInsufficient) {
-			return nil, err
+		if err != nil {
+			return err
 		}
-	}
-	return nil, ErrSharedInsufficient
+		found = true
+		if !item.Enabled || item.Ciphertext == "" || item.CooldownUntil > time.Now().Unix() {
+			return ErrSharedInsufficient
+		}
+		today := time.Now().UTC().Format("2006-01-02")
+		if item.Day != today {
+			item.Day = today
+			item.DailyUsed = 0
+		}
+		if item.DailyUsed+item.Reserved+amount > item.DailyLimit {
+			return ErrSharedInsufficient
+		}
+		item.Reserved += amount
+		if err := tx.Save(&item).Error; err != nil {
+			return err
+		}
+		return tx.Create(&SharedCharge{RequestID: requestID, ConsumerID: userID, OwnerID: item.OwnerID, ContributionID: item.ID, Reserved: amount, Status: "reserved", CreatedAt: time.Now().UTC()}).Error
+	})
+	return found, err
 }
 
-// SharedSettle is idempotent. Zero actual means the upstream failed and all reserved credits are refunded.
-func SharedSettle(requestID string, actual int64) error {
+// Settle after native consumption was successful. The contributor's users.quota
+// increment and unique settlement record commit atomically in the same database.
+func SharedSettleChannel(requestID string, actual int64) error {
 	if actual < 0 {
-		return errors.New("negative charge")
+		return errors.New("negative quota")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var credited int64
+	var owner int
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		var charge SharedCharge
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestID).First(&charge).Error; err != nil {
 			return err
@@ -144,71 +218,138 @@ func SharedSettle(requestID string, actual int64) error {
 		if charge.Status != "reserved" {
 			return nil
 		}
+		var item SharedContribution
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&item, charge.ContributionID).Error; err != nil {
+			return err
+		}
 		if actual > charge.Reserved {
 			actual = charge.Reserved
-		} // safety bound: never spend outside reservation
-		var key SharedContribution
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&key, charge.ContributionID).Error; err != nil {
+		}
+		item.Reserved -= charge.Reserved
+		if item.Reserved < 0 {
+			return errors.New("invalid reservation state")
+		}
+		if item.Day == charge.CreatedAt.UTC().Format("2006-01-02") {
+			item.DailyUsed += actual
+		}
+		if err := tx.Save(&item).Error; err != nil {
 			return err
-		}
-		key.Reserved -= charge.Reserved
-		if key.Reserved < 0 {
-			return errors.New("negative reserved quota")
-		}
-		// Settle to the originating day. Running calls must finish before the next day's reset.
-		if key.Day == charge.CreatedAt.UTC().Format("2006-01-02") {
-			key.DailyUsed += actual
-		}
-		if err := tx.Save(&key).Error; err != nil {
-			return err
-		}
-		if charge.ConsumerID != charge.OwnerID {
-			if err := tx.FirstOrCreate(&SharedAccount{}, SharedAccount{UserID: charge.ConsumerID}).Error; err != nil {
-				return err
-			}
-			if err := tx.FirstOrCreate(&SharedAccount{}, SharedAccount{UserID: charge.OwnerID}).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&SharedAccount{}).Where("user_id = ?", charge.ConsumerID).
-				Update("balance", gorm.Expr("balance + ?", charge.Reserved-actual)).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&SharedAccount{}).Where("user_id = ?", charge.OwnerID).
-				Update("balance", gorm.Expr("balance + ?", actual)).Error; err != nil {
-				return err
-			}
 		}
 		charge.Charged = actual
 		charge.Status = "settled"
-		return tx.Save(&charge).Error
+		if err := tx.Save(&charge).Error; err != nil {
+			return err
+		}
+		if actual > 0 {
+			result := tx.Model(&User{}).Where("id = ?", charge.OwnerID).Update("quota", gorm.Expr("quota + ?", actual))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("contributor no longer exists")
+			}
+			credited = actual
+			owner = charge.OwnerID
+		}
+		return nil
 	})
-}
-
-func SharedGrant(userID int, micros int64, reference string) error {
-	if userID <= 0 || micros <= 0 || micros > 100000000 || reference == "" {
-		return errors.New("invalid grant")
+	if err == nil && credited > 0 {
+		if cacheErr := cacheIncrUserQuota(owner, credited); cacheErr != nil {
+			common.SysLog("shared contributor wallet cache: " + cacheErr.Error())
+		}
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&SharedCharge{RequestID: "grant:" + reference, ConsumerID: userID, OwnerID: userID,
-			Charged: micros, Status: "grant", CreatedAt: time.Now().UTC()}).Error; err != nil {
-			return err
-		}
-		if err := tx.FirstOrCreate(&SharedAccount{}, SharedAccount{UserID: userID}).Error; err != nil {
-			return err
-		}
-		return tx.Model(&SharedAccount{}).Where("user_id = ?", userID).
-			Update("balance", gorm.Expr("balance + ?", micros)).Error
-	})
+	return err
 }
 
-// Expired reservations can be refunded safely because upstream calls are capped at 60 seconds.
-func SharedReclaim() {
-	var stale []SharedCharge
-	if err := DB.Where("status = ? AND created_at < ?", "reserved", time.Now().Add(-3*time.Minute)).
-		Limit(100).Find(&stale).Error; err != nil {
+func SharedReclaimExpired() {
+	var pending []SharedCharge
+	if err := DB.Where("status = ? AND created_at < ?", "reserved", time.Now().Add(-2*time.Hour)).Limit(100).Find(&pending).Error; err != nil {
 		return
 	}
-	for _, item := range stale {
-		_ = SharedSettle(item.RequestID, 0)
+	for _, p := range pending {
+		_ = SharedSettleChannel(p.RequestID, 0)
 	}
+}
+
+// Native wallet grant retains a unique request id for idempotent admin grants.
+func SharedGrant(userID int, quota int64, reference string) error {
+	if userID <= 0 || quota <= 0 || quota > 50000000 || reference == "" || len(reference) > 64 {
+		return errors.New("invalid grant")
+	}
+	var credited bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&SharedCharge{RequestID: "grant:" + reference, ConsumerID: userID, OwnerID: userID, Charged: quota, Status: "grant", CreatedAt: time.Now().UTC()}).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&User{}).Where("id = ?", userID).Update("quota", gorm.Expr("quota + ?", quota))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("user not found")
+		}
+		credited = true
+		return nil
+	})
+	if err == nil && credited {
+		if e := cacheIncrUserQuota(userID, quota); e != nil {
+			common.SysLog("shared grant cache: " + e.Error())
+		}
+	}
+	return err
+}
+
+// SharedChannelAvailable is consulted by native channel routing so exhausted
+// contributor channels are removed from the candidate set before selection.
+func SharedChannelAvailable(channelID int) bool {
+	var item SharedContribution
+	if err := DB.Select("enabled", "cooldown_until", "daily_limit", "daily_used", "reserved", "day", "provider_id").
+		Where("channel_id = ?", channelID).First(&item).Error; err != nil {
+		return false
+	}
+	if !item.Enabled || item.CooldownUntil > time.Now().Unix() {
+		return false
+	}
+	var provider SharedProvider
+	if err := DB.Select("enabled").First(&provider, item.ProviderID).Error; err != nil || !provider.Enabled {
+		return false
+	}
+	if item.Day != time.Now().UTC().Format("2006-01-02") {
+		return true
+	}
+	return item.DailyLimit-item.DailyUsed-item.Reserved >= 50
+}
+
+func SharedSetProviderEnabled(id uint, enabled bool) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&SharedProvider{}).Where("id = ?", id).Update("enabled", enabled)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		var items []SharedContribution
+		if err := tx.Where("provider_id = ?", id).Find(&items).Error; err != nil {
+			return err
+		}
+		for _, item := range items {
+			status := common.ChannelStatusManuallyDisabled
+			channelEnabled := enabled && item.Enabled && item.Ciphertext != ""
+			if channelEnabled {
+				status = common.ChannelStatusEnabled
+			}
+			if err := tx.Model(&Channel{}).Where("id = ?", item.ChannelID).Update("status", status).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&Ability{}).Where("channel_id = ?", item.ChannelID).Update("enabled", channelEnabled).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		InitChannelCache()
+	}
+	return err
 }

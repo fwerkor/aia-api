@@ -32,7 +32,7 @@ type Charge = {
   status: string;
   created_at: string;
 };
-const usd = (micro: number) => "$" + (micro / 1_000_000).toFixed(5);
+const usd = (quota: number) => "$" + (quota / 500_000).toFixed(5);
 const inputStyle =
   "min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm";
 const labelStyle = "text-sm font-medium";
@@ -112,17 +112,15 @@ export function SharedPool() {
         <div className="mx-auto w-full max-w-5xl space-y-6 p-4">
           <section className="rounded-xl border p-5 space-y-2">
             <h2 className="text-lg font-semibold">
-              共享积分余额：{usd(balance)}
+              原生钱包余额：{usd(balance)}
             </h2>
             <p className="text-sm text-muted-foreground">
               贡献自己的 API Key 后，当其他用户实际使用该 Key 时获得共享积分。
-              积分仅用于共享接口，不与站内付费钱包、套餐或现金互通。
+              奖励直接记入原生钱包，与现有 /v1 API 调用使用同一额度。
             </p>
             <p className="text-sm">
               共享 API 地址：
-              <code className="select-all">
-                https://api.nju-aia.com/shared/v1
-              </code>
+              <code className="select-all">https://api.nju-aia.com/v1</code>
             </p>
             <p className="text-sm">
               使用现有 API Token，兼容 OpenAI Chat
@@ -152,7 +150,7 @@ export function SharedPool() {
                   await api.post("/api/shared/contributions", {
                     provider_id: Number(providerID),
                     key,
-                    daily_limit: Math.round(Number(dailyLimit) * 1_000_000),
+                    daily_limit: Math.round(Number(dailyLimit) * 500_000),
                   });
                   setKey("");
                 }, "Key 已通过实际模型调用验证并加入共享池");
@@ -314,7 +312,7 @@ export function SharedPool() {
                       () =>
                         api.post("/api/shared/admin/grants", {
                           user_id: Number(grantUser),
-                          micros: Math.round(Number(grantAmount) * 1_000_000),
+                          quota: Math.round(Number(grantAmount) * 500_000),
                           reference: grantRef,
                         }),
                       "积分发放成功",

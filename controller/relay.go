@@ -70,6 +70,11 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
+	defer func() {
+		if k := c.GetString("aia_shared_reservation"); k != "" {
+			_ = model.SharedSettleChannel(k, 0)
+		}
+	}()
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
@@ -199,6 +204,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = channelErr
 			break
 		}
+		shareRequest, shareErr := PrepareNativeShare(c, relayInfo, channel)
+		if shareErr != nil {
+			newAPIError = shareErr
+			break
+		}
 		addUsedChannel(c, channel.Id)
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
@@ -233,6 +243,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			return
 		}
 
+		if shareRequest != "" {
+			if err := model.SharedSettleChannel(shareRequest, 0); err != nil {
+				logger.LogError(c, "shared budget refund: "+err.Error())
+			}
+			c.Set("aia_shared_reservation", "")
+		}
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 

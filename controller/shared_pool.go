@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/aes"
@@ -24,10 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 func sharedSecret() ([]byte, error) {
@@ -165,9 +163,8 @@ func SharedMine(c *gin.Context) {
 		shareError(c, 500, "database unavailable")
 		return
 	}
-	var account model.SharedAccount
-	err := model.DB.First(&account, "user_id = ?", userID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	balance, err := model.GetUserQuota(userID, false)
+	if err != nil {
 		shareError(c, 500, "database unavailable")
 		return
 	}
@@ -185,7 +182,7 @@ func SharedMine(c *gin.Context) {
 		}
 		history = append(history, gin.H{"request_id": ch.RequestID, "direction": direction, "charged": ch.Charged, "status": ch.Status, "created_at": ch.CreatedAt})
 	}
-	c.JSON(200, gin.H{"success": true, "data": gin.H{"contributions": keys, "balance": account.Balance, "history": history}})
+	c.JSON(200, gin.H{"success": true, "data": gin.H{"contributions": keys, "balance": balance, "history": history}})
 }
 func SharedAdminProviders(c *gin.Context) {
 	var providers []model.SharedProvider
@@ -238,8 +235,20 @@ func SharedAdminEnableProvider(c *gin.Context) {
 		shareError(c, 400, "invalid state")
 		return
 	}
-	result := model.DB.Model(&model.SharedProvider{}).Where("id = ?", id).Update("enabled", body.Enabled)
-	if result.Error != nil || result.RowsAffected != 1 {
+	if body.Enabled {
+		var p model.SharedProvider
+		if err := model.DB.First(&p, id).Error; err != nil {
+			shareError(c, 404, "provider not found")
+			return
+		}
+		nativePrice, modelHasPrice := ratio_setting.GetModelPrice(p.Model, false)
+		nativeRatio, modelHasRatio, _ := ratio_setting.GetModelRatio(p.Model)
+		if (!modelHasPrice || nativePrice <= 0) && (!modelHasRatio || nativeRatio <= 0) {
+			shareError(c, 400, "configure native model pricing before enabling this endpoint")
+			return
+		}
+	}
+	if err := model.SharedSetProviderEnabled(uint(id), body.Enabled); err != nil {
 		shareError(c, 404, "provider not found")
 		return
 	}
@@ -248,7 +257,7 @@ func SharedAdminEnableProvider(c *gin.Context) {
 func SharedAdminGrant(c *gin.Context) {
 	var body struct {
 		UserID    int    `json:"user_id"`
-		Micros    int64  `json:"micros"`
+		Quota     int64  `json:"quota"`
 		Reference string `json:"reference"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -264,7 +273,7 @@ func SharedAdminGrant(c *gin.Context) {
 		shareError(c, 404, "user not found")
 		return
 	}
-	if err := model.SharedGrant(body.UserID, body.Micros, body.Reference); err != nil {
+	if err := model.SharedGrant(body.UserID, body.Quota, body.Reference); err != nil {
 		shareError(c, 400, "grant rejected (possibly duplicate reference)")
 		return
 	}
@@ -284,7 +293,7 @@ func SharedContribute(c *gin.Context) {
 		shareError(c, 400, "invalid contribution")
 		return
 	}
-	if body.DailyLimit < 100 || body.DailyLimit > 100000000 || len(body.Key) < 8 || len(body.Key) > 4096 || strings.TrimSpace(body.Key) != body.Key {
+	if body.DailyLimit < 50 || body.DailyLimit > 50000000 || len(body.Key) < 8 || len(body.Key) > 4096 || strings.TrimSpace(body.Key) != body.Key {
 		shareError(c, 400, "invalid daily limit or API key")
 		return
 	}
@@ -328,7 +337,7 @@ func SharedContribute(c *gin.Context) {
 	}
 	hint := "****" + body.Key[len(body.Key)-4:]
 	item := model.SharedContribution{OwnerID: c.GetInt("id"), ProviderID: body.ProviderID, Ciphertext: sealed, Fingerprint: fp, KeyHint: hint, DailyLimit: body.DailyLimit, Enabled: true, Day: time.Now().UTC().Format("2006-01-02")}
-	if err := model.DB.Create(&item).Error; err != nil {
+	if err := model.SharedCreateContribution(&item, provider); err != nil {
 		shareError(c, 409, "key already contributed or database error")
 		return
 	}
@@ -340,26 +349,16 @@ func SharedUpdateContribution(c *gin.Context) {
 		shareError(c, 400, "invalid contribution")
 		return
 	}
-	var body struct {
+	var req struct {
 		Enabled    *bool `json:"enabled"`
 		DailyLimit int64 `json:"daily_limit"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		shareError(c, 400, "invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil || req.DailyLimit < 50 || req.DailyLimit > 50000000 {
+		shareError(c, 400, "invalid budget or state")
 		return
 	}
-	if body.DailyLimit < 100 || body.DailyLimit > 100000000 || body.Enabled == nil {
-		shareError(c, 400, "invalid budget or status")
-		return
-	}
-	// Reservations retain their own settlement record; disabling only affects new requests.
-	res := model.DB.Model(&model.SharedContribution{}).Where("id = ? AND owner_id = ?", id, c.GetInt("id"))
-	if *body.Enabled {
-		res = res.Where("ciphertext <> ?", "")
-	}
-	res = res.Updates(map[string]any{"enabled": *body.Enabled, "daily_limit": body.DailyLimit})
-	if res.Error != nil || res.RowsAffected != 1 {
-		shareError(c, 404, "contribution not found")
+	if err := model.SharedSetEnabled(c.GetInt("id"), uint(id), *req.Enabled, req.DailyLimit, false); err != nil {
+		shareError(c, 409, "contribution cannot be updated")
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
@@ -370,24 +369,21 @@ func SharedDeleteContribution(c *gin.Context) {
 		shareError(c, 400, "invalid contribution")
 		return
 	}
-	// Retain billing history and pending requests; destroy credential only if no active reservations.
-	res := model.DB.Model(&model.SharedContribution{}).Where("id = ? AND owner_id = ? AND reserved = 0", id, c.GetInt("id")).
-		Updates(map[string]any{"enabled": false, "ciphertext": "", "fingerprint": fmt.Sprintf("revoked:%d", id)})
-	if res.Error != nil || res.RowsAffected != 1 {
-		shareError(c, 409, "contribution not found or has an active request")
+	var item model.SharedContribution
+	if err := model.DB.Where("id = ? AND owner_id = ?", id, c.GetInt("id")).First(&item).Error; err != nil {
+		shareError(c, 404, "contribution not found")
+		return
+	}
+	if err := model.SharedSetEnabled(c.GetInt("id"), uint(id), false, item.DailyLimit, true); err != nil {
+		shareError(c, 409, "contribution has active calls; pause first")
 		return
 	}
 	c.JSON(200, gin.H{"success": true})
 }
 
-func SharedModels(c *gin.Context) {
-	var all []model.SharedProvider
-	model.DB.Where("enabled = ?", true).Find(&all)
-	list := make([]gin.H, 0, len(all))
-	for _, item := range all {
-		list = append(list, gin.H{"id": item.Model, "object": "model", "owned_by": "aia-shared"})
-	}
-	c.JSON(200, gin.H{"object": "list", "data": list})
+type sharedUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
 }
 
 func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, bool, int64, error) {
@@ -415,14 +411,33 @@ func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, boo
 	}
 	for _, m := range msgs {
 		if (m.Role != "system" && m.Role != "user" && m.Role != "assistant") || len(m.Content) > 32768 {
-			return nil, false, 0, errors.New("only text message roles are supported")
+			return nil, false, 0, errors.New("only text messages are supported")
+		}
+	}
+	var rawMessages []map[string]json.RawMessage
+	if err := json.Unmarshal(req["messages"], &rawMessages); err != nil {
+		return nil, false, 0, err
+	}
+	for _, msg := range rawMessages {
+		for k := range msg {
+			if k != "role" && k != "content" {
+				return nil, false, 0, errors.New("unsupported nested message field")
+			}
+		}
+		if _, ok := msg["role"]; !ok {
+			return nil, false, 0, errors.New("missing role")
+		}
+		if _, ok := msg["content"]; !ok {
+			return nil, false, 0, errors.New("missing content")
 		}
 	}
 	// Strip all extraneous nested message fields before forwarding upstream.
 	req["messages"], _ = json.Marshal(msgs)
-	maxTokens := 256
-	if provider.MaxOutput < maxTokens {
-		maxTokens = provider.MaxOutput
+	maxTokens := provider.MaxOutput
+	if _, old := req["max_tokens"]; !old {
+		if _, newCap := req["max_completion_tokens"]; !newCap {
+			return nil, false, 0, errors.New("specify max_tokens or max_completion_tokens for shared channels")
+		}
 	}
 	for _, field := range []string{"max_tokens", "max_completion_tokens"} {
 		if x, ok := req[field]; ok {
@@ -455,7 +470,7 @@ func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, boo
 		req["stream_options"] = json.RawMessage(`{"include_usage":true}`)
 	}
 	// Upper-bound input by UTF-8 request bytes; tokens cannot materially exceed byte length.
-	estimate := int64(math.Ceil(float64(len(raw)+128)*provider.InputPrice+float64(maxTokens)*provider.OutputPrice)) + 10
+	estimate := int64(math.Ceil(float64(len(raw)+1024)*provider.InputPrice*2+float64(maxTokens)*provider.OutputPrice*3)) + 10
 	if estimate < 100 {
 		estimate = 100
 	}
@@ -464,175 +479,4 @@ func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, boo
 	}
 	result, err := json.Marshal(req)
 	return result, stream, estimate, err
-}
-
-type sharedUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-}
-
-func sharedCost(p model.SharedProvider, u sharedUsage, cap int64) int64 {
-	if u.PromptTokens < 0 || u.CompletionTokens < 0 {
-		return cap
-	}
-	cost := int64(math.Ceil(float64(u.PromptTokens)*p.InputPrice + float64(u.CompletionTokens)*p.OutputPrice))
-	if cost < 1 {
-		cost = 1
-	}
-	if cost > cap {
-		cost = cap
-	}
-	return cost
-}
-func SharedChat(c *gin.Context) {
-	if !shareConfigured(c) {
-		return
-	}
-	// The API key has already passed New API's token authentication.
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 65537))
-	if err != nil || len(body) > 65536 {
-		shareError(c, 413, "request too large")
-		return
-	}
-	var stub struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &stub); err != nil || stub.Model == "" {
-		shareError(c, 400, "missing model")
-		return
-	}
-	var provider model.SharedProvider
-	if err := model.DB.Where("model = ? AND enabled = ?", stub.Model, true).First(&provider).Error; err != nil {
-		shareError(c, 404, "shared model unavailable")
-		return
-	}
-	platformToken, tokenErr := model.GetTokenById(c.GetInt("token_id"))
-	if tokenErr != nil {
-		shareError(c, 401, "invalid platform token")
-		return
-	}
-	if platformToken.ModelLimitsEnabled {
-		allowed := platformToken.GetModelLimitsMap()
-		if !allowed[provider.Model] {
-			shareError(c, 403, "model is not permitted by platform token")
-			return
-		}
-	}
-	payload, stream, maxCost, err := shareBoundedRequest(body, provider)
-	if err != nil {
-		shareError(c, 400, err.Error())
-		return
-	}
-	model.SharedReclaim()
-	requestID := common.NewRequestId()
-	contribution, err := model.SharedReserve(c.GetInt("id"), provider.ID, maxCost, requestID)
-	if err != nil {
-		shareError(c, 402, "insufficient shared credits or all contribution budgets are exhausted")
-		return
-	}
-	settled := false
-	// The reservation is refunded on any early failure. Upstream calls have a strict timeout.
-	defer func() {
-		if !settled {
-			_ = model.SharedSettle(requestID, 0)
-		}
-	}()
-	key, err := sharedOpen(contribution.Ciphertext)
-	if err != nil {
-		shareError(c, 500, "credential unavailable")
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	resp, err := shareCall(ctx, provider, key, payload)
-	if err != nil {
-		shareError(c, 502, "upstream unavailable")
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			model.DB.Model(&model.SharedContribution{}).Where("id = ?", contribution.ID).Update("enabled", false)
-		} else if resp.StatusCode == http.StatusTooManyRequests {
-			model.DB.Model(&model.SharedContribution{}).Where("id = ?", contribution.ID).
-				Update("cooldown_until", time.Now().Add(time.Minute).Unix())
-		}
-		// No upstream response usage can be verified: no reward is minted.
-		shareError(c, 502, "upstream error (HTTP "+strconv.Itoa(resp.StatusCode)+")")
-		return
-	}
-	if !stream {
-		content, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		if err != nil {
-			shareError(c, 502, "incomplete upstream response")
-			return
-		}
-		var parsed struct {
-			Usage   sharedUsage       `json:"usage"`
-			Choices []json.RawMessage `json:"choices"`
-		}
-		if json.Unmarshal(content, &parsed) != nil || len(parsed.Choices) == 0 {
-			shareError(c, 502, "upstream did not return a valid completion")
-			return
-		}
-		charge := maxCost
-		if parsed.Usage.PromptTokens > 0 {
-			charge = sharedCost(provider, parsed.Usage, maxCost)
-		}
-		if err := model.SharedSettle(requestID, charge); err != nil {
-			shareError(c, 500, "settlement failed")
-			return
-		}
-		settled = true
-		c.Data(200, "application/json", content)
-		return
-	}
-	// Forward SSE while collecting an upstream-provided usage event. When usage is absent,
-	// debit the maximum reservation rather than allowing free streamed traffic.
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("X-Accel-Buffering", "no")
-	c.Status(200)
-	reader := bufio.NewReader(resp.Body)
-	var usage sharedUsage
-	usageSeen := false
-	bytesSent := 0
-	clientDisconnected := false
-	for {
-		line, readErr := reader.ReadBytes(10)
-		bytesSent += len(line)
-		if bytesSent > 5<<20 {
-			break
-		}
-		if bytes.HasPrefix(line, []byte("data: ")) {
-			var event struct {
-				Usage *sharedUsage `json:"usage"`
-			}
-			if json.Unmarshal(bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data: "))), &event) == nil && event.Usage != nil && event.Usage.PromptTokens > 0 {
-				usage = *event.Usage
-				usageSeen = true
-			}
-		}
-		if len(line) > 0 {
-			if !clientDisconnected {
-				if _, writeErr := c.Writer.Write(line); writeErr == nil {
-					c.Writer.Flush()
-				} else {
-					clientDisconnected = true
-				}
-			}
-		}
-		if readErr != nil {
-			break
-		}
-	}
-	// An unknown upstream charge must not create phantom earned credits.
-	if usageSeen {
-		err = model.SharedSettle(requestID, sharedCost(provider, usage, maxCost))
-	} else {
-		err = model.SharedSettle(requestID, maxCost)
-	}
-	if err == nil {
-		settled = true
-	}
 }

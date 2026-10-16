@@ -10,50 +10,63 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestSharedPoolLedger(t *testing.T) {
+func TestSharedNativeWalletAndChannel(t *testing.T) {
 	old := DB
-	db, err := gorm.Open(sqlite.Open("file:shared-ledger?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:shared-native-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(1)
+	conn, _ := db.DB()
+	conn.SetMaxOpenConns(1)
 	DB = db
-	t.Cleanup(func() { DB = old; sqlDB.Close() })
+	t.Cleanup(func() { DB = old; conn.Close() })
+	require.NoError(t, db.AutoMigrate(&User{}, &Channel{}, &Ability{}))
 	require.NoError(t, SharedMigrate())
-	require.NoError(t, DB.Create(&SharedContribution{ID: 1, OwnerID: 10, ProviderID: 5, Ciphertext: "encrypted", Enabled: true, DailyLimit: 50000, Day: time.Now().UTC().Format("2006-01-02")}).Error)
-	require.NoError(t, SharedGrant(20, 30000, "one"))
-	require.Error(t, SharedGrant(20, 30000, "one"))
-	owner, err := SharedReserve(10, 5, 10000, "own")
+	require.NoError(t, db.Create(&User{Id: 10, Quota: 1000, AffCode: "a10", Username: "u10"}).Error)
+	require.NoError(t, db.Create(&User{Id: 20, Quota: 30000, AffCode: "a20", Username: "u20"}).Error)
+	provider := SharedProvider{Name: "test", BaseURL: "https://example.com/v1", Model: "test-model", Enabled: true, InputPrice: 1, OutputPrice: 3, MaxOutput: 256}
+	require.NoError(t, db.Create(&provider).Error)
+	item := SharedContribution{OwnerID: 10, ProviderID: provider.ID, Ciphertext: "encrypted", Fingerprint: "fp-native", Enabled: true, KeyHint: "****test", DailyLimit: 30000, Day: time.Now().UTC().Format("2006-01-02")}
+	require.NoError(t, SharedCreateContribution(&item, provider))
+	require.NotZero(t, item.ChannelID)
+	channel, err := GetChannelById(item.ChannelID, true)
 	require.NoError(t, err)
-	require.Equal(t, 10, owner.OwnerID)
-	require.NoError(t, SharedSettle("own", 500))
-	require.NoError(t, SharedSettle("own", 500))
-	var balance SharedAccount
-	require.ErrorIs(t, DB.First(&balance, "user_id = ?", 10).Error, gorm.ErrRecordNotFound)
-	_, err = SharedReserve(20, 5, 40000, "too-big")
+	require.Equal(t, SharedKeyMarker(item.ID), channel.Key)
+	require.True(t, SharedIsChannel(channel))
+	require.Equal(t, provider.BaseURL, channel.GetBaseURL())
+	var ability Ability
+	require.NoError(t, db.First(&ability, "channel_id = ?", item.ChannelID).Error)
+	require.True(t, ability.Enabled)
+	_, err = SharedReserveChannel(item.ChannelID, 20, "req-too-expensive", 35000)
 	require.ErrorIs(t, err, ErrSharedInsufficient)
-	_, err = SharedReserve(20, 5, 10000, "external")
+	found, err := SharedReserveChannel(item.ChannelID, 20, "req-1", 12000)
 	require.NoError(t, err)
-	balance = SharedAccount{}
-	require.NoError(t, DB.First(&balance, "user_id = ?", 20).Error)
-	require.EqualValues(t, 20000, balance.Balance)
-	require.NoError(t, SharedSettle("external", 1250))
-	require.NoError(t, SharedSettle("external", 1250))
-	balance = SharedAccount{}
-	require.NoError(t, DB.First(&balance, "user_id = ?", 20).Error)
-	require.EqualValues(t, 28750, balance.Balance)
-	balance = SharedAccount{}
-	require.NoError(t, DB.First(&balance, "user_id = ?", 10).Error)
-	require.EqualValues(t, 1250, balance.Balance)
-	var contributor SharedContribution
-	require.NoError(t, DB.First(&contributor, 1).Error)
-	require.Zero(t, contributor.Reserved)
-	require.EqualValues(t, 1750, contributor.DailyUsed)
-	_, err = SharedReserve(20, 5, 1000, "refund")
+	require.True(t, found)
+	require.NoError(t, SharedSettleChannel("req-1", 1250))
+	require.NoError(t, SharedSettleChannel("req-1", 1250))
+	var owner, consumer User
+	require.NoError(t, db.First(&owner, 10).Error)
+	require.NoError(t, db.First(&consumer, 20).Error)
+	require.Equal(t, 2250, owner.Quota)
+	require.Equal(t, 30000, consumer.Quota) // The native BillingSession, not shared accounting, charges the consumer.
+	var after SharedContribution
+	require.NoError(t, db.First(&after, item.ID).Error)
+	require.EqualValues(t, 1250, after.DailyUsed)
+	require.Zero(t, after.Reserved)
+	found, err = SharedReserveChannel(item.ChannelID, 20, "req-refund", 5000)
+	require.True(t, found)
 	require.NoError(t, err)
-	require.NoError(t, SharedSettle("refund", 0))
-	balance = SharedAccount{}
-	require.NoError(t, DB.First(&balance, "user_id = ?", 20).Error)
-	require.EqualValues(t, 28750, balance.Balance)
-	require.Error(t, SharedSettle("unknown", 0))
+	require.NoError(t, SharedSettleChannel("req-refund", 0))
+	require.NoError(t, db.First(&after, item.ID).Error)
+	require.Zero(t, after.Reserved)
+	require.NoError(t, SharedGrant(20, 5000, "bootstrap:20"))
+	require.Error(t, SharedGrant(20, 5000, "bootstrap:20"))
+	consumer = User{}
+	require.NoError(t, db.First(&consumer, 20).Error)
+	require.Equal(t, 35000, consumer.Quota)
+	require.NoError(t, SharedSetEnabled(10, item.ID, false, item.DailyLimit, false))
+	_, err = SharedReserveChannel(item.ChannelID, 20, "req-paused", 100)
+	require.ErrorIs(t, err, ErrSharedInsufficient)
+	require.NoError(t, SharedSetEnabled(10, item.ID, true, item.DailyLimit, false))
+	require.NoError(t, SharedSetEnabled(10, item.ID, false, item.DailyLimit, true))
+	require.Error(t, SharedSetEnabled(10, item.ID, true, item.DailyLimit, false))
 	require.True(t, errors.Is(ErrSharedInsufficient, ErrSharedInsufficient))
 }

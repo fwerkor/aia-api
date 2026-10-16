@@ -162,7 +162,10 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if setupError := SetupContextForSelectedChannel(c, channel, modelRequest.Model); setupError != nil {
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "shared channel credential unavailable", types.ErrorCodeGetChannelFailed)
+			return
+		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -477,7 +480,14 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		// 必须设置为 false，否则在重试到单个 key 的时候会导致日志显示错误
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)
 	}
-	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
+	c.Set("aia_shared_channel", model.SharedIsChannel(channel))
+	if model.SharedIsChannel(channel) {
+		var keyError error
+		key, keyError = model.SharedDecryptCredential(channel.Id)
+		if keyError != nil {
+			return types.NewError(keyError, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+	}
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
 

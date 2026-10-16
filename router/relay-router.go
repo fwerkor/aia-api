@@ -15,10 +15,6 @@ func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	router.Use(middleware.StatsMiddleware())
-	shared := router.Group("/shared/v1")
-	shared.Use(middleware.RouteTag("relay"), middleware.TokenAuthReadOnly(), middleware.SharedTokenEnforce(), middleware.ModelRequestRateLimit())
-	shared.GET("/models", controller.SharedModels)
-	shared.POST("/chat/completions", controller.SharedChat)
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.RouteTag("relay"))
