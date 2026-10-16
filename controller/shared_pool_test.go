@@ -31,6 +31,10 @@ func TestSharedRequestBounds(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stream)
 	require.Greater(t, limit, int64(0))
+	forwarded, _, _, err := shareBoundedRequest([]byte(`{"model":"test-model","messages":[{"role":"user","content":"hi","image_url":"http://internal.example/image"}],"max_tokens":400}`), provider)
+	require.NoError(t, err)
+	require.NotContains(t, string(forwarded), "image_url")
+	require.Contains(t, string(forwarded), `"max_tokens":400`)
 	for _, input := range []string{
 		`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"tools":[]}`,
 		`{"model":"test-model","messages":[{"role":"user","content":"hi"}],"max_tokens":1000000}`,

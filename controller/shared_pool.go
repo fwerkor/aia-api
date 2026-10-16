@@ -418,6 +418,8 @@ func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, boo
 			return nil, false, 0, errors.New("only text message roles are supported")
 		}
 	}
+	// Strip all extraneous nested message fields before forwarding upstream.
+	req["messages"], _ = json.Marshal(msgs)
 	maxTokens := 256
 	if provider.MaxOutput < maxTokens {
 		maxTokens = provider.MaxOutput
@@ -428,9 +430,7 @@ func shareBoundedRequest(raw []byte, provider model.SharedProvider) ([]byte, boo
 			if err := json.Unmarshal(x, &n); err != nil || n < 1 || n > provider.MaxOutput {
 				return nil, false, 0, errors.New("invalid maximum output tokens")
 			}
-			if n < maxTokens {
-				maxTokens = n
-			}
+			maxTokens = n
 		}
 	}
 	// Reject inconsistent dual bounds and forcibly set an output bound.
@@ -571,11 +571,15 @@ func SharedChat(c *gin.Context) {
 			Usage   sharedUsage       `json:"usage"`
 			Choices []json.RawMessage `json:"choices"`
 		}
-		if json.Unmarshal(content, &parsed) != nil || len(parsed.Choices) == 0 || parsed.Usage.PromptTokens <= 0 {
-			shareError(c, 502, "upstream did not return auditable token usage")
+		if json.Unmarshal(content, &parsed) != nil || len(parsed.Choices) == 0 {
+			shareError(c, 502, "upstream did not return a valid completion")
 			return
 		}
-		if err := model.SharedSettle(requestID, sharedCost(provider, parsed.Usage, maxCost)); err != nil {
+		charge := maxCost
+		if parsed.Usage.PromptTokens > 0 {
+			charge = sharedCost(provider, parsed.Usage, maxCost)
+		}
+		if err := model.SharedSettle(requestID, charge); err != nil {
 			shareError(c, 500, "settlement failed")
 			return
 		}
