@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -41,7 +42,15 @@ func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *mo
 	if len(raw) > 65536 {
 		return "", types.NewError(errors.New("shared request body is too large"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	_, _, microEstimate, err := shareBoundedRequest(raw, provider)
+	var microEstimate int64
+	if !model.SharedChannelSupportsPath(channel.Id, c.Request.URL.Path) {
+		return "", types.NewError(errors.New("contributed channel route not permitted"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if model.SharedProtocol(provider.Protocol) == "responses" {
+		microEstimate, err = shareBoundedResponses(raw, provider)
+	} else {
+		_, _, microEstimate, err = shareBoundedRequest(raw, provider)
+	}
 	if err != nil {
 		return "", types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -68,4 +77,42 @@ func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *mo
 	}
 	c.Set("aia_shared_reservation", key)
 	return key, nil
+}
+
+func shareBoundedResponses(raw []byte, p model.SharedProvider) (int64, error) {
+	var fields map[string]json.RawMessage
+	if len(raw) > 65536 || json.Unmarshal(raw, &fields) != nil {
+		return 0, errors.New("invalid Responses request")
+	}
+	allowed := map[string]bool{"model": true, "input": true, "instructions": true, "max_output_tokens": true, "stream": true}
+	for name := range fields {
+		if !allowed[name] {
+			return 0, fmt.Errorf("unsupported Responses field: %s", name)
+		}
+	}
+	var modelName, input string
+	if json.Unmarshal(fields["model"], &modelName) != nil || modelName != p.Model {
+		return 0, errors.New("Responses model not permitted")
+	}
+	if json.Unmarshal(fields["input"], &input) != nil || len(input) == 0 || len(input) > 32768 {
+		return 0, errors.New("bounded text-only input required")
+	}
+	var maxOutput int
+	if json.Unmarshal(fields["max_output_tokens"], &maxOutput) != nil || maxOutput < 16 || maxOutput > p.MaxOutput {
+		return 0, errors.New("max_output_tokens must be between 16 and configured limit")
+	}
+	if v, ok := fields["instructions"]; ok {
+		var instructions string
+		if json.Unmarshal(v, &instructions) != nil || len(instructions) > 8192 {
+			return 0, errors.New("invalid instructions")
+		}
+	}
+	if v, ok := fields["stream"]; ok {
+		var stream bool
+		if json.Unmarshal(v, &stream) != nil {
+			return 0, errors.New("invalid stream")
+		}
+	}
+	estimatedUSD := (float64(len(raw)+2048)*p.InputPrice*2 + float64(maxOutput)*p.OutputPrice*3) / 1e6
+	return int64(math.Ceil(estimatedUSD * 1e6)), nil
 }

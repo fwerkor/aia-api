@@ -53,3 +53,24 @@ func TestSharedEndpointValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://api.example.com/v1", u)
 }
+
+func TestSharedProviderEndpointProtocols(t *testing.T) {
+	for _, base := range []string{
+		"https://opencode.ai/zen/v1",
+		"https://api.openai.com/v1",
+		"https://api.anthropic.com/v1",
+		"https://generativelanguage.googleapis.com/v1beta/openai",
+	} {
+		_, err := shareEndpoint(base)
+		require.NoError(t, err)
+	}
+	for _, base := range []string{
+		"http://generativelanguage.googleapis.com/v1beta/openai",
+		"https://127.0.0.1/v1beta/openai",
+		"https://api.anthropic.com/v1/../admin",
+		"https://api.openai.com/v1?key=secret",
+	} {
+		_, err := shareEndpoint(base)
+		require.Error(t, err)
+	}
+}

@@ -21,6 +21,7 @@ type SharedProvider struct {
 	ID          uint    `json:"id" gorm:"primaryKey"`
 	Name        string  `json:"name"`
 	BaseURL     string  `json:"base_url"`
+	Protocol    string  `json:"protocol" gorm:"default:chat"`
 	Model       string  `json:"model" gorm:"uniqueIndex"`
 	InputPrice  float64 `json:"input_price"`
 	OutputPrice float64 `json:"output_price"`
@@ -61,7 +62,55 @@ type SharedCharge struct {
 var ErrSharedInsufficient = errors.New("contributed channel budget exhausted")
 
 func SharedMigrate() error {
-	return DB.AutoMigrate(&SharedProvider{}, &SharedContribution{}, &SharedCharge{})
+	if err := DB.AutoMigrate(&SharedProvider{}, &SharedContribution{}, &SharedCharge{}); err != nil {
+		return err
+	}
+	return SharedSeedProviderTemplates()
+}
+
+// Official API-key gateways. Deliberately disabled until upstream consent and
+// platform pricing are reviewed. Subscription/OAuth quotas are not transferable.
+func SharedSeedProviderTemplates() error {
+	templates := []SharedProvider{
+		{Name: "OpenCode Zen API Key（非订阅）", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat", Model: "kimi-k2.5", MaxOutput: 512},
+		{Name: "Codex 开发者 API（非 ChatGPT 订阅）", BaseURL: "https://api.openai.com/v1", Protocol: "responses", Model: "gpt-6-sol", InputPrice: 2, OutputPrice: 10, MaxOutput: 512},
+		{Name: "Claude Code 开发者 API（非 Claude 订阅）", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", Model: "claude-sonnet-4-6", InputPrice: 3, OutputPrice: 15, MaxOutput: 512},
+		{Name: "Antigravity 相关 Gemini API（非 IDE 配额）", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini", Model: "gemini-3.8-flash", InputPrice: 0.75, OutputPrice: 3.75, MaxOutput: 512},
+	}
+	for _, tpl := range templates {
+		var found SharedProvider
+		err := DB.Where("model = ?", tpl.Model).First(&found).Error
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err := DB.Create(&tpl).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func SharedProtocol(p string) string {
+	if p == "" {
+		return "chat"
+	}
+	return p
+}
+func SharedChannelSupportsPath(channelID int, path string) bool {
+	var item SharedContribution
+	if err := DB.Select("provider_id").Where("channel_id = ?", channelID).First(&item).Error; err != nil {
+		return false
+	}
+	var p SharedProvider
+	if err := DB.Select("protocol").First(&p, item.ProviderID).Error; err != nil {
+		return false
+	}
+	if SharedProtocol(p.Protocol) == "responses" {
+		return path == "/v1/responses"
+	}
+	return path == "/v1/chat/completions"
 }
 
 func SharedKeyMarker(id uint) string { return fmt.Sprintf("aia-shared:%d", id) }
@@ -105,8 +154,19 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 	if item.OwnerID <= 0 || item.DailyLimit <= 0 || item.Ciphertext == "" {
 		return errors.New("invalid contribution")
 	}
-	base := provider.BaseURL
-	channel := &Channel{Type: constant.ChannelTypeOpenAI, Key: "aia-shared:pending",
+	base := strings.TrimSuffix(provider.BaseURL, "/v1")
+	channelType := constant.ChannelTypeOpenAI
+	switch SharedProtocol(provider.Protocol) {
+	case "chat", "responses":
+	case "anthropic":
+		channelType = constant.ChannelTypeAnthropic
+	case "gemini":
+		channelType = constant.ChannelTypeGemini
+		base = "https://generativelanguage.googleapis.com"
+	default:
+		return errors.New("unsupported provider protocol")
+	}
+	channel := &Channel{Type: channelType, Key: "aia-shared:pending",
 		Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Model, item.OwnerID),
 		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: provider.Model, Group: "default"}
 	err := DB.Transaction(func(tx *gorm.DB) error {

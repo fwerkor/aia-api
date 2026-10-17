@@ -11,6 +11,7 @@ type Provider = {
   name: string;
   model: string;
   base_url: string;
+  protocol: string;
   input_price: number;
   output_price: number;
   max_output: number;
@@ -48,6 +49,9 @@ const errorText = (err: unknown) => {
 export function SharedPool() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [adminProviders, setAdminProviders] = useState<Provider[]>([]);
+  const [priceEdits, setPriceEdits] = useState<
+    Record<number, { input: string; output: string }>
+  >({});
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [history, setHistory] = useState<Charge[]>([]);
   const [balance, setBalance] = useState(0);
@@ -63,6 +67,7 @@ export function SharedPool() {
   const [form, setForm] = useState({
     name: "",
     base_url: "",
+    protocol: "chat",
     model: "",
     input_price: "0.5",
     output_price: "2",
@@ -378,6 +383,21 @@ export function SharedPool() {
                   );
                 }}
               >
+                <label className={labelStyle}>
+                  上游协议
+                  <select
+                    className={"mt-1 w-full " + inputStyle}
+                    value={form.protocol}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, protocol: e.target.value }))
+                    }
+                  >
+                    <option value="chat">OpenAI Chat Completions</option>
+                    <option value="responses">OpenAI Responses</option>
+                    <option value="anthropic">Anthropic Messages</option>
+                    <option value="gemini">Gemini API</option>
+                  </select>
+                </label>
                 {(
                   [
                     "name",
@@ -392,7 +412,8 @@ export function SharedPool() {
                     {
                       {
                         name: "服务商名称",
-                        base_url: "HTTPS Endpoint（以 /v1 结尾）",
+                        base_url:
+                          "HTTPS Endpoint（Gemini /v1beta/openai，其他 /v1）",
                         model: "模型名称",
                         input_price: "输入 USD / 百万 Token",
                         output_price: "输出 USD / 百万 Token",
@@ -418,29 +439,104 @@ export function SharedPool() {
                   </Button>
                 </div>
               </form>
+              <p className="text-xs text-muted-foreground">
+                官方 API 预设均默认停用。API Key 的额度与 OpenCode/Codex/Claude
+                Code/Antigravity 客户端订阅、OAuth
+                配额不同；启用前须确认服务条款和计费。
+              </p>
               {adminProviders.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center justify-between gap-3 border-t py-2 text-sm"
-                >
-                  <span>
+                <div key={p.id} className="space-y-2 border-t py-3 text-sm">
+                  <p className="font-medium">
                     {p.name} — {p.model}（{p.enabled ? "已启用" : "未启用"}）
-                  </span>
-                  <Button
-                    disabled={busy}
-                    variant="outline"
-                    onClick={() =>
-                      void mutate(
-                        () =>
-                          api.put("/api/shared/admin/providers/" + p.id, {
-                            enabled: !p.enabled,
-                          }),
-                        "Endpoint 状态已更新",
-                      )
-                    }
-                  >
-                    {p.enabled ? "停用" : "启用"}
-                  </Button>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {p.protocol || "chat"} · {p.base_url}
+                  </p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label>
+                      输入 $/MTok
+                      <Input
+                        type="number"
+                        min="0.000001"
+                        step="0.000001"
+                        className="w-28"
+                        value={priceEdits[p.id]?.input ?? String(p.input_price)}
+                        onChange={(e) =>
+                          setPriceEdits((prev) => ({
+                            ...prev,
+                            [p.id]: {
+                              input: e.target.value,
+                              output:
+                                prev[p.id]?.output ?? String(p.output_price),
+                            },
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      输出 $/MTok
+                      <Input
+                        type="number"
+                        min="0.000001"
+                        step="0.000001"
+                        className="w-28"
+                        value={
+                          priceEdits[p.id]?.output ?? String(p.output_price)
+                        }
+                        onChange={(e) =>
+                          setPriceEdits((prev) => ({
+                            ...prev,
+                            [p.id]: {
+                              input: prev[p.id]?.input ?? String(p.input_price),
+                              output: e.target.value,
+                            },
+                          }))
+                        }
+                      />
+                    </label>
+                    <Button
+                      disabled={busy}
+                      variant="outline"
+                      onClick={() =>
+                        void mutate(
+                          () =>
+                            api.put("/api/shared/admin/providers/" + p.id, {
+                              enabled: p.enabled,
+                              input_price: Number(
+                                priceEdits[p.id]?.input ?? p.input_price,
+                              ),
+                              output_price: Number(
+                                priceEdits[p.id]?.output ?? p.output_price,
+                              ),
+                            }),
+                          "价格已保存",
+                        )
+                      }
+                    >
+                      保存价格
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      variant="outline"
+                      onClick={() =>
+                        void mutate(
+                          () =>
+                            api.put("/api/shared/admin/providers/" + p.id, {
+                              enabled: !p.enabled,
+                              input_price: Number(
+                                priceEdits[p.id]?.input ?? p.input_price,
+                              ),
+                              output_price: Number(
+                                priceEdits[p.id]?.output ?? p.output_price,
+                              ),
+                            }),
+                          "Endpoint 状态已更新",
+                        )
+                      }
+                    >
+                      {p.enabled ? "停用" : "启用"}
+                    </Button>
+                  </div>
                 </div>
               ))}
             </section>

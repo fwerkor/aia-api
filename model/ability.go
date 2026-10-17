@@ -176,7 +176,7 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
 	for _, channel := range channels {
 		if SharedIsChannel(channel) {
-			sharedChannels[channel.Id] = requestPath == "/v1/chat/completions" && SharedChannelAvailable(channel.Id)
+			sharedChannels[channel.Id] = SharedChannelSupportsPath(channel.Id, requestPath) && SharedChannelAvailable(channel.Id)
 		}
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
 			advancedConfigs[channel.Id] = channel.GetOtherSettings().AdvancedCustom

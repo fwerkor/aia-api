@@ -2,6 +2,8 @@ package model
 
 import (
 	"errors"
+	"fmt"
+	"github.com/QuantumNous/new-api/constant"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ func TestSharedNativeWalletAndChannel(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SharedKeyMarker(item.ID), channel.Key)
 	require.True(t, SharedIsChannel(channel))
-	require.Equal(t, provider.BaseURL, channel.GetBaseURL())
+	require.Equal(t, "https://example.com", channel.GetBaseURL())
 	var ability Ability
 	require.NoError(t, db.First(&ability, "channel_id = ?", item.ChannelID).Error)
 	require.True(t, ability.Enabled)
@@ -69,4 +71,47 @@ func TestSharedNativeWalletAndChannel(t *testing.T) {
 	require.NoError(t, SharedSetEnabled(10, item.ID, false, item.DailyLimit, true))
 	require.Error(t, SharedSetEnabled(10, item.ID, true, item.DailyLimit, false))
 	require.True(t, errors.Is(ErrSharedInsufficient, ErrSharedInsufficient))
+}
+
+func TestSharedAPITemplateMigration(t *testing.T) {
+	old := DB
+	db, err := gorm.Open(sqlite.Open("file:shared-templates?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	raw, _ := db.DB()
+	raw.SetMaxOpenConns(1)
+	DB = db
+	t.Cleanup(func() { DB = old; raw.Close() })
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, SharedMigrate())
+	require.NoError(t, SharedMigrate())
+	var providers []SharedProvider
+	require.NoError(t, db.Order("id").Find(&providers).Error)
+	require.Len(t, providers, 4)
+	want := map[string]struct {
+		protocol, url string
+		kind          int
+		route         string
+		channelURL    string
+	}{
+		"kimi-k2.5":         {"chat", "https://opencode.ai/zen/v1", constant.ChannelTypeOpenAI, "/v1/chat/completions", "https://opencode.ai/zen"},
+		"gpt-6-sol":         {"responses", "https://api.openai.com/v1", constant.ChannelTypeOpenAI, "/v1/responses", "https://api.openai.com"},
+		"claude-sonnet-4-6": {"anthropic", "https://api.anthropic.com/v1", constant.ChannelTypeAnthropic, "/v1/chat/completions", "https://api.anthropic.com"},
+		"gemini-3.8-flash":  {"gemini", "https://generativelanguage.googleapis.com/v1beta/openai", constant.ChannelTypeGemini, "/v1/chat/completions", "https://generativelanguage.googleapis.com"},
+	}
+	for idx, p := range providers {
+		expected, ok := want[p.Model]
+		require.True(t, ok)
+		require.False(t, p.Enabled)
+		require.Equal(t, expected.protocol, p.Protocol)
+		require.Equal(t, expected.url, p.BaseURL)
+		item := SharedContribution{OwnerID: idx + 1, ProviderID: p.ID, Enabled: true,
+			Ciphertext: "encrypted", Fingerprint: fmt.Sprintf("test-template-%d", idx), DailyLimit: 10000}
+		require.NoError(t, SharedCreateContribution(&item, p))
+		channel, err := GetChannelById(item.ChannelID, true)
+		require.NoError(t, err)
+		require.Equal(t, expected.kind, channel.Type)
+		require.Equal(t, expected.channelURL, channel.GetBaseURL())
+		require.True(t, SharedChannelSupportsPath(channel.Id, expected.route))
+		require.False(t, SharedChannelSupportsPath(channel.Id, "/v1/images/generations"))
+	}
 }

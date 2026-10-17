@@ -103,8 +103,8 @@ func shareEndpoint(raw string) (string, error) {
 	if ip := net.ParseIP(host); ip != nil && (!ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback()) {
 		return "", errors.New("private endpoint is disallowed")
 	}
-	if !strings.HasSuffix(u.Path, "/v1") {
-		return "", errors.New("endpoint must end in /v1")
+	if !strings.HasSuffix(u.Path, "/v1") && u.Path != "/v1beta/openai" {
+		return "", errors.New("unsupported endpoint base path")
 	}
 	return raw, nil
 }
@@ -135,11 +135,25 @@ func sharedHTTPClient() *http.Client {
 }
 
 func shareCall(ctx context.Context, p model.SharedProvider, key string, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body))
+	protocol := model.SharedProtocol(p.Protocol)
+	path := "/chat/completions"
+	if protocol == "responses" {
+		path = "/responses"
+		body, _ = json.Marshal(map[string]any{"model": p.Model, "input": "ping", "max_output_tokens": 32})
+	} else if protocol == "anthropic" {
+		path = "/messages"
+		body, _ = json.Marshal(map[string]any{"model": p.Model, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 16})
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	if protocol == "anthropic" {
+		req.Header.Set("x-api-key", key)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	return sharedHTTPClient().Do(req)
@@ -202,6 +216,18 @@ func SharedAdminCreateProvider(c *gin.Context) {
 		return
 	}
 	endpoint, err := shareEndpoint(p.BaseURL)
+	p.Protocol = model.SharedProtocol(p.Protocol)
+	if p.Protocol != "chat" && p.Protocol != "responses" && p.Protocol != "anthropic" && p.Protocol != "gemini" {
+		shareError(c, 400, "unsupported API protocol")
+		return
+	}
+	if err == nil {
+		u, _ := url.Parse(endpoint)
+		if (p.Protocol == "gemini" && u.Path != "/v1beta/openai") ||
+			(p.Protocol != "gemini" && !strings.HasSuffix(u.Path, "/v1")) {
+			err = errors.New("base URL does not match protocol")
+		}
+	}
 	if err != nil {
 		shareError(c, 400, err.Error())
 		return
@@ -229,16 +255,34 @@ func SharedAdminEnableProvider(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Enabled bool `json:"enabled"`
+		Enabled     bool     `json:"enabled"`
+		InputPrice  *float64 `json:"input_price"`
+		OutputPrice *float64 `json:"output_price"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		shareError(c, 400, "invalid state")
 		return
 	}
+	if body.InputPrice != nil || body.OutputPrice != nil {
+		if body.InputPrice == nil || body.OutputPrice == nil || *body.InputPrice <= 0 || *body.OutputPrice <= 0 || *body.InputPrice > 10000 || *body.OutputPrice > 10000 ||
+			math.IsNaN(*body.InputPrice) || math.IsNaN(*body.OutputPrice) || math.IsInf(*body.InputPrice, 0) || math.IsInf(*body.OutputPrice, 0) {
+			shareError(c, 400, "both verified upstream prices required")
+			return
+		}
+		if err := model.DB.Model(&model.SharedProvider{}).Where("id = ?", id).
+			Updates(map[string]any{"input_price": *body.InputPrice, "output_price": *body.OutputPrice}).Error; err != nil {
+			shareError(c, 500, "unable to update endpoint prices")
+			return
+		}
+	}
 	if body.Enabled {
 		var p model.SharedProvider
 		if err := model.DB.First(&p, id).Error; err != nil {
 			shareError(c, 404, "provider not found")
+			return
+		}
+		if p.InputPrice <= 0 || p.OutputPrice <= 0 {
+			shareError(c, 400, "configure confirmed upstream prices before enabling")
 			return
 		}
 		nativePrice, modelHasPrice := ratio_setting.GetModelPrice(p.Model, false)
@@ -322,13 +366,31 @@ func SharedContribute(c *gin.Context) {
 		shareError(c, 422, "key cannot call the configured model (upstream HTTP "+strconv.Itoa(resp.StatusCode)+")")
 		return
 	}
-	var validation struct {
-		Choices []json.RawMessage `json:"choices"`
-		Usage   sharedUsage       `json:"usage"`
-	}
-	if json.Unmarshal(validationBody, &validation) != nil || len(validation.Choices) == 0 || validation.Usage.PromptTokens < 1 {
-		shareError(c, 422, "upstream did not return valid completion usage")
+	var response map[string]json.RawMessage
+	if json.Unmarshal(validationBody, &response) != nil {
+		shareError(c, 422, "invalid upstream response")
 		return
+	}
+	switch model.SharedProtocol(provider.Protocol) {
+	case "responses":
+		var rawUsage map[string]int
+		if json.Unmarshal(response["usage"], &rawUsage) != nil || rawUsage["input_tokens"] <= 0 || len(response["output"]) == 0 {
+			shareError(c, 422, "Responses API did not return auditable usage")
+			return
+		}
+	case "anthropic":
+		var usage map[string]int
+		if json.Unmarshal(response["usage"], &usage) != nil || usage["input_tokens"] <= 0 || len(response["content"]) == 0 {
+			shareError(c, 422, "Anthropic API did not return auditable usage")
+			return
+		}
+	default:
+		var usage map[string]int
+		var choices []json.RawMessage
+		if json.Unmarshal(response["usage"], &usage) != nil || usage["prompt_tokens"] <= 0 || json.Unmarshal(response["choices"], &choices) != nil || len(choices) == 0 {
+			shareError(c, 422, "Chat API did not return auditable usage")
+			return
+		}
 	}
 	sealed, fp, err := sharedSeal(body.Key)
 	if err != nil {

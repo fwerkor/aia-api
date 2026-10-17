@@ -11,6 +11,23 @@ This repository contains the AIA API customizations to [New API](https://github.
 - Shared channels participate in the original New API channel scheduler and `/v1/chat/completions`, alongside administrator channels. Only plain-text chat with an explicit bounded `max_tokens` or `max_completion_tokens` is allowed through contributed keys; ordinary channels remain unchanged. Streaming settlement follows native New API usage accounting.
 - Contributor and administrator can pause/disable channels. The existing New API upstream-failure and auto-ban workflow applies. Contributors can revoke saved ciphertext once no requests are active. Exhausted budgets and disabled providers are filtered from native channel selection.
 
+## Built-in upstream API templates
+
+The following four provider templates are inserted idempotently into the administrator list. **All start disabled**. These are official developer **API-key** products, not gateways into subscription/session/OAuth usage:
+
+| Label | Developer API base | Verification protocol | Example model |
+|---|---|---|---|
+| OpenCode Zen | `https://opencode.ai/zen/v1` | OpenAI Chat Completions | `kimi-k2.5` |
+| Codex-related OpenAI API | `https://api.openai.com/v1` | OpenAI Responses | `gpt-6-sol` |
+| Claude Code-related Claude API | `https://api.anthropic.com/v1` | Anthropic Messages | `claude-sonnet-4-6` |
+| Antigravity-related Gemini API | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini-compatible Chat Completions | `gemini-3.8-flash` |
+
+Model availability, billing and provider terms vary. Confirm terms explicitly permit proxy sharing, set native New API model pricing, and verify provider input/output pricing before enabling. OpenCode Zen is created with **unset** prices; the other example prices are reference estimates that must be checked again at activation. Google Gemini 3.8 Flash introductory pricing is scheduled to increase after December 31, 2026.
+
+**These developer API credentials do not consume existing Codex/ChatGPT, Claude Code Pro/Max, or Antigravity IDE subscription quota.** Never submit browser cookies, IDE refresh tokens, Google sign-in tokens or Claude Code OAuth credentials into this API-key contribution form.
+
+References: [OpenCode Zen](https://docs.opencode.ai/docs/zen/), [OpenAI API models](https://developers.openai.com/api/docs/models/gpt-6-sol), [Claude model API](https://platform.claude.com/docs/en/models/sonnet-4-6/overview), [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai).
+
 ## Deployment
 
 The original New API backend/frontend dependencies are still required. To build locally:

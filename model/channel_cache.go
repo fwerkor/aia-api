@@ -226,7 +226,7 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			continue
 		}
 		if SharedIsChannel(channel) {
-			if requestPath == "/v1/chat/completions" && SharedChannelAvailable(channel.Id) {
+			if SharedChannelSupportsPath(channel.Id, requestPath) && SharedChannelAvailable(channel.Id) {
 				filtered = append(filtered, channelId)
 			}
 			continue
