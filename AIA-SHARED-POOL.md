@@ -11,9 +11,24 @@ This repository contains the AIA API customizations to [New API](https://github.
 - Shared channels participate in the original New API channel scheduler and `/v1/chat/completions`, alongside administrator channels. Only plain-text chat with an explicit bounded `max_tokens` or `max_completion_tokens` is allowed through contributed keys; ordinary channels remain unchanged. Streaming settlement follows native New API usage accounting.
 - Contributor and administrator can pause/disable channels. The existing New API upstream-failure and auto-ban workflow applies. Contributors can revoke saved ciphertext once no requests are active. Exhausted budgets and disabled providers are filtered from native channel selection.
 
+## Independent model catalog
+
+Models and endpoints are now separate resources:
+
+- `shared_models`: globally unique API model code, display name, protocol, per-model reference input/output prices, maximum output, enabled state.
+- `shared_providers`: upstream HTTPS base URL and protocol, with no required model or model pricing.
+- `shared_provider_models`: explicit many-to-many mappings; multiple endpoints can provide the same model, and one endpoint can provide several models.
+- `shared_contributions.models`: the set of models an owner explicitly selected for one encrypted key; validation runs once per selected model. Native New API channels expose all selected models in the existing `/v1` route and keep one combined daily contribution budget.
+
+Admin API: `GET /api/shared/admin/models`, `POST /api/shared/admin/models`, `PUT /api/shared/admin/models/:id`, `PUT /api/shared/admin/providers/:id/models`. Signed-in users can browse `GET /api/shared/models` independently of whether any upstream is enabled.
+
+Seeded model catalog: `deepseek-flash` (display: DeepSeek V4.1 Flash), `deepseek-v4-pro` (legacy compatibility), `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `claude-sonnet-4-6`, `claude-opus-4-8`, `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-4-argon`, `kimi-k2.5`. Official DeepSeek documentation specifies `deepseek-flash` as the API ID for DeepSeek V4.1 Flash, including the October 17 update. Missing reference prices are kept at zero until explicitly checked. Catalogue presence is not a claim that the model is callable through any particular provider. Prior four endpoint/model links migrate into the join table without enabling any endpoint or spending credentials.
+
+Sources: [DeepSeek official API guide](https://api-docs.deepseek.com/zh-cn/), [DeepSeek updates](https://api-docs.deepseek.com/zh-cn/updates/), [OpenAI model list](https://developers.openai.com/api/docs/models), [Claude model IDs](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions), [Gemini models](https://ai.google.dev/gemini-api/docs/models).
+
 ## Built-in upstream API templates
 
-The following four provider templates are inserted idempotently into the administrator list. **All start disabled**. These are official developer **API-key** products, not gateways into subscription/session/OAuth usage:
+The following four provider templates are inserted idempotently into the administrator list. Their original model associations are migrated to the independent model catalog. **All start disabled**. These are official developer **API-key** products, not gateways into subscription/session/OAuth usage:
 
 | Label | Developer API base | Verification protocol | Example model |
 |---|---|---|---|

@@ -22,7 +22,7 @@ type SharedProvider struct {
 	Name        string  `json:"name"`
 	BaseURL     string  `json:"base_url"`
 	Protocol    string  `json:"protocol" gorm:"default:chat"`
-	Model       string  `json:"model" gorm:"uniqueIndex"`
+	Model       string  `json:"-"`
 	InputPrice  float64 `json:"input_price"`
 	OutputPrice float64 `json:"output_price"`
 	MaxOutput   int     `json:"max_output"`
@@ -43,6 +43,7 @@ type SharedContribution struct {
 	DailyUsed     int64     `json:"daily_used"`
 	Reserved      int64     `json:"reserved"`
 	Day           string    `json:"day"`
+	Models        string    `json:"models"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -65,21 +66,24 @@ func SharedMigrate() error {
 	if err := DB.AutoMigrate(&SharedProvider{}, &SharedContribution{}, &SharedCharge{}); err != nil {
 		return err
 	}
-	return SharedSeedProviderTemplates()
+	if err := SharedSeedProviderTemplates(); err != nil {
+		return err
+	}
+	return SharedCatalogMigrate()
 }
 
 // Official API-key gateways. Deliberately disabled until upstream consent and
 // platform pricing are reviewed. Subscription/OAuth quotas are not transferable.
 func SharedSeedProviderTemplates() error {
 	templates := []SharedProvider{
-		{Name: "OpenCode Zen API Key（非订阅）", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat", Model: "kimi-k2.5", MaxOutput: 512},
-		{Name: "Codex 开发者 API（非 ChatGPT 订阅）", BaseURL: "https://api.openai.com/v1", Protocol: "responses", Model: "gpt-6-sol", InputPrice: 2, OutputPrice: 10, MaxOutput: 512},
-		{Name: "Claude Code 开发者 API（非 Claude 订阅）", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", Model: "claude-sonnet-4-6", InputPrice: 3, OutputPrice: 15, MaxOutput: 512},
-		{Name: "Antigravity 相关 Gemini API（非 IDE 配额）", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini", Model: "gemini-3.8-flash", InputPrice: 0.75, OutputPrice: 3.75, MaxOutput: 512},
+		{Name: "OpenCode Zen API Key（非订阅）", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat"},
+		{Name: "Codex 开发者 API（非 ChatGPT 订阅）", BaseURL: "https://api.openai.com/v1", Protocol: "responses"},
+		{Name: "Claude Code 开发者 API（非 Claude 订阅）", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic"},
+		{Name: "Antigravity 相关 Gemini API（非 IDE 配额）", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini"},
 	}
 	for _, tpl := range templates {
 		var found SharedProvider
-		err := DB.Where("model = ?", tpl.Model).First(&found).Error
+		err := DB.Where("base_url = ? AND protocol = ?", tpl.BaseURL, tpl.Protocol).First(&found).Error
 		if err == nil {
 			continue
 		}
@@ -154,6 +158,22 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 	if item.OwnerID <= 0 || item.DailyLimit <= 0 || item.Ciphertext == "" {
 		return errors.New("invalid contribution")
 	}
+	codes := strings.Split(item.Models, ",")
+	if item.Models == "" {
+		if provider.Model == "" {
+			return errors.New("no selected models")
+		}
+		codes = []string{provider.Model}
+	}
+	selected, err := SharedVerifyModels(provider.ID, codes)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(selected))
+	for _, entry := range selected {
+		names = append(names, entry.Code)
+	}
+	item.Models = strings.Join(names, ",")
 	base := strings.TrimSuffix(provider.BaseURL, "/v1")
 	channelType := constant.ChannelTypeOpenAI
 	switch SharedProtocol(provider.Protocol) {
@@ -167,9 +187,9 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 		return errors.New("unsupported provider protocol")
 	}
 	channel := &Channel{Type: channelType, Key: "aia-shared:pending",
-		Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Model, item.OwnerID),
-		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: provider.Model, Group: "default"}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+		Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Name, item.OwnerID),
+		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: item.Models, Group: "default"}
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(item).Error; err != nil {
 			return err
 		}

@@ -160,9 +160,9 @@ func shareCall(ctx context.Context, p model.SharedProvider, key string, body []b
 }
 
 func SharedProviders(c *gin.Context) {
-	var all []model.SharedProvider
-	if err := model.DB.Where("enabled = ?", true).Order("id").Find(&all).Error; err != nil {
-		shareError(c, 500, "database unavailable")
+	all, err := model.SharedProvidersWithModels(true)
+	if err != nil {
+		shareError(c, 500, "providers unavailable")
 		return
 	}
 	c.JSON(200, gin.H{"success": true, "data": all})
@@ -199,12 +199,12 @@ func SharedMine(c *gin.Context) {
 	c.JSON(200, gin.H{"success": true, "data": gin.H{"contributions": keys, "balance": balance, "history": history}})
 }
 func SharedAdminProviders(c *gin.Context) {
-	var providers []model.SharedProvider
-	if err := model.DB.Order("id").Find(&providers).Error; err != nil {
-		shareError(c, 500, "database unavailable")
+	all, err := model.SharedProvidersWithModels(false)
+	if err != nil {
+		shareError(c, 500, "providers unavailable")
 		return
 	}
-	c.JSON(200, gin.H{"success": true, "data": providers})
+	c.JSON(200, gin.H{"success": true, "data": all})
 }
 func SharedAdminCreateProvider(c *gin.Context) {
 	if !shareConfigured(c) {
@@ -232,11 +232,8 @@ func SharedAdminCreateProvider(c *gin.Context) {
 		shareError(c, 400, err.Error())
 		return
 	}
-	if strings.TrimSpace(p.Model) == "" || len(p.Model) > 100 || len(p.Name) > 100 || p.InputPrice < 0 || p.OutputPrice < 0 ||
-		p.InputPrice > 10000 || p.OutputPrice > 10000 || (p.InputPrice == 0 && p.OutputPrice == 0) ||
-		math.IsNaN(p.InputPrice) || math.IsNaN(p.OutputPrice) || math.IsInf(p.InputPrice, 0) || math.IsInf(p.OutputPrice, 0) ||
-		p.MaxOutput < 1 || p.MaxOutput > 2048 {
-		shareError(c, 400, "invalid model, pricing or output bound")
+	if len(strings.TrimSpace(p.Name)) == 0 || len(p.Name) > 120 {
+		shareError(c, 400, "invalid endpoint name")
 		return
 	}
 	p.BaseURL = endpoint
@@ -281,15 +278,22 @@ func SharedAdminEnableProvider(c *gin.Context) {
 			shareError(c, 404, "provider not found")
 			return
 		}
-		if p.InputPrice <= 0 || p.OutputPrice <= 0 {
-			shareError(c, 400, "configure confirmed upstream prices before enabling")
+		bindings, err := model.SharedProviderModels(p.ID, true)
+		if err != nil || len(bindings) == 0 {
+			shareError(c, 400, "link at least one active model")
 			return
 		}
-		nativePrice, modelHasPrice := ratio_setting.GetModelPrice(p.Model, false)
-		nativeRatio, modelHasRatio, _ := ratio_setting.GetModelRatio(p.Model)
-		if (!modelHasPrice || nativePrice <= 0) && (!modelHasRatio || nativeRatio <= 0) {
-			shareError(c, 400, "configure native model pricing before enabling this endpoint")
-			return
+		for _, m := range bindings {
+			if m.InputPrice <= 0 || m.OutputPrice <= 0 || m.MaxOutput <= 0 {
+				shareError(c, 400, "verify catalog model pricing before enabling")
+				return
+			}
+			nativePrice, hasPrice := ratio_setting.GetModelPrice(m.Code, false)
+			nativeRatio, hasRatio, _ := ratio_setting.GetModelRatio(m.Code)
+			if (!hasPrice || nativePrice <= 0) && (!hasRatio || nativeRatio <= 0) {
+				shareError(c, 400, "configure New API native price for model: "+m.Code)
+				return
+			}
 		}
 	}
 	if err := model.SharedSetProviderEnabled(uint(id), body.Enabled); err != nil {
@@ -329,9 +333,10 @@ func SharedContribute(c *gin.Context) {
 		return
 	}
 	var body struct {
-		ProviderID uint   `json:"provider_id"`
-		Key        string `json:"key"`
-		DailyLimit int64  `json:"daily_limit"`
+		ProviderID uint     `json:"provider_id"`
+		Key        string   `json:"key"`
+		DailyLimit int64    `json:"daily_limit"`
+		Models     []string `json:"models"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		shareError(c, 400, "invalid contribution")
@@ -346,50 +351,62 @@ func SharedContribute(c *gin.Context) {
 		shareError(c, 404, "provider unavailable")
 		return
 	}
-	// A real, low-cost model call checks model-specific permissions. Do not log credentials or upstream content.
-	request := map[string]any{"model": provider.Model, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
-	payload, _ := json.Marshal(request)
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-	defer cancel()
-	resp, err := shareCall(ctx, provider, body.Key, payload)
+	selected, err := model.SharedVerifyModels(provider.ID, body.Models)
 	if err != nil {
-		shareError(c, 422, "endpoint validation failed")
+		shareError(c, 400, err.Error())
 		return
 	}
-	validationBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	resp.Body.Close()
-	if readErr != nil {
-		shareError(c, 422, "endpoint validation failed")
-		return
-	}
-	if resp.StatusCode != 200 {
-		shareError(c, 422, "key cannot call the configured model (upstream HTTP "+strconv.Itoa(resp.StatusCode)+")")
-		return
-	}
-	var response map[string]json.RawMessage
-	if json.Unmarshal(validationBody, &response) != nil {
-		shareError(c, 422, "invalid upstream response")
-		return
-	}
-	switch model.SharedProtocol(provider.Protocol) {
-	case "responses":
-		var rawUsage map[string]int
-		if json.Unmarshal(response["usage"], &rawUsage) != nil || rawUsage["input_tokens"] <= 0 || len(response["output"]) == 0 {
-			shareError(c, 422, "Responses API did not return auditable usage")
+	for _, selectedModel := range selected {
+		quote := provider
+		quote.Model = selectedModel.Code
+		quote.InputPrice = selectedModel.InputPrice
+		quote.OutputPrice = selectedModel.OutputPrice
+		quote.MaxOutput = selectedModel.MaxOutput
+		// A real, low-cost model call checks model-specific permissions. Do not log credentials or upstream content.
+		request := map[string]any{"model": quote.Model, "messages": []map[string]string{{"role": "user", "content": "ping"}}, "max_tokens": 1, "stream": false}
+		payload, _ := json.Marshal(request)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+		defer cancel()
+		resp, err := shareCall(ctx, quote, body.Key, payload)
+		if err != nil {
+			shareError(c, 422, "endpoint validation failed")
 			return
 		}
-	case "anthropic":
-		var usage map[string]int
-		if json.Unmarshal(response["usage"], &usage) != nil || usage["input_tokens"] <= 0 || len(response["content"]) == 0 {
-			shareError(c, 422, "Anthropic API did not return auditable usage")
+		validationBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		resp.Body.Close()
+		if readErr != nil {
+			shareError(c, 422, "endpoint validation failed")
 			return
 		}
-	default:
-		var usage map[string]int
-		var choices []json.RawMessage
-		if json.Unmarshal(response["usage"], &usage) != nil || usage["prompt_tokens"] <= 0 || json.Unmarshal(response["choices"], &choices) != nil || len(choices) == 0 {
-			shareError(c, 422, "Chat API did not return auditable usage")
+		if resp.StatusCode != 200 {
+			shareError(c, 422, "key cannot call the configured model (upstream HTTP "+strconv.Itoa(resp.StatusCode)+")")
 			return
+		}
+		var response map[string]json.RawMessage
+		if json.Unmarshal(validationBody, &response) != nil {
+			shareError(c, 422, "invalid upstream response")
+			return
+		}
+		switch model.SharedProtocol(quote.Protocol) {
+		case "responses":
+			var rawUsage map[string]int
+			if json.Unmarshal(response["usage"], &rawUsage) != nil || rawUsage["input_tokens"] <= 0 || len(response["output"]) == 0 {
+				shareError(c, 422, "Responses API did not return auditable usage")
+				return
+			}
+		case "anthropic":
+			var usage map[string]int
+			if json.Unmarshal(response["usage"], &usage) != nil || usage["input_tokens"] <= 0 || len(response["content"]) == 0 {
+				shareError(c, 422, "Anthropic API did not return auditable usage")
+				return
+			}
+		default:
+			var usage map[string]int
+			var choices []json.RawMessage
+			if json.Unmarshal(response["usage"], &usage) != nil || usage["prompt_tokens"] <= 0 || json.Unmarshal(response["choices"], &choices) != nil || len(choices) == 0 {
+				shareError(c, 422, "Chat API did not return auditable usage")
+				return
+			}
 		}
 	}
 	sealed, fp, err := sharedSeal(body.Key)
@@ -398,7 +415,7 @@ func SharedContribute(c *gin.Context) {
 		return
 	}
 	hint := "****" + body.Key[len(body.Key)-4:]
-	item := model.SharedContribution{OwnerID: c.GetInt("id"), ProviderID: body.ProviderID, Ciphertext: sealed, Fingerprint: fp, KeyHint: hint, DailyLimit: body.DailyLimit, Enabled: true, Day: time.Now().UTC().Format("2006-01-02")}
+	item := model.SharedContribution{OwnerID: c.GetInt("id"), ProviderID: body.ProviderID, Models: strings.Join(body.Models, ","), Ciphertext: sealed, Fingerprint: fp, KeyHint: hint, DailyLimit: body.DailyLimit, Enabled: true, Day: time.Now().UTC().Format("2006-01-02")}
 	if err := model.SharedCreateContribution(&item, provider); err != nil {
 		shareError(c, 409, "key already contributed or database error")
 		return

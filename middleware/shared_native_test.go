@@ -37,6 +37,9 @@ func TestNativeSharedChannelCredentialDecryption(t *testing.T) {
 	ciphertext := base64.RawURLEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(upstream), nil))
 	provider := model.SharedProvider{Name: "mock", BaseURL: "https://example.com/v1", Model: "native-test", Enabled: true, MaxOutput: 128}
 	require.NoError(t, db.Create(&provider).Error)
+	m := model.SharedModel{Code: "native-test", Name: "Native Test", Protocol: "chat", InputPrice: 1, OutputPrice: 3, MaxOutput: 128, Enabled: true}
+	require.NoError(t, db.Create(&m).Error)
+	require.NoError(t, model.SharedBindProviderModel(provider.ID, m.ID, true))
 	item := model.SharedContribution{OwnerID: 5, ProviderID: provider.ID, Enabled: true, Ciphertext: ciphertext, DailyLimit: 50000, Fingerprint: "test-native-fingerprint"}
 	require.NoError(t, model.SharedCreateContribution(&item, provider))
 	channel, err := model.GetChannelById(item.ChannelID, true)

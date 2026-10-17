@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -19,9 +20,6 @@ import (
 func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *model.Channel) (string, *types.NewAPIError) {
 	if !c.GetBool("aia_shared_channel") {
 		return "", nil
-	}
-	if c.Request.URL.Path != "/v1/chat/completions" {
-		return "", types.NewError(errors.New("contributed channels only support text chat completions"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 	var contribution model.SharedContribution
 	if err := model.DB.Where("channel_id = ?", channel.Id).First(&contribution).Error; err != nil {
@@ -46,10 +44,35 @@ func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *mo
 	if !model.SharedChannelSupportsPath(channel.Id, c.Request.URL.Path) {
 		return "", types.NewError(errors.New("contributed channel route not permitted"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	var requestModel struct {
+		Model string `json:"model"`
+	}
+	if err = json.Unmarshal(raw, &requestModel); err != nil || requestModel.Model == "" {
+		return "", types.NewError(errors.New("missing model"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	allowed := false
+	for _, code := range strings.Split(contribution.Models, ",") {
+		if code == requestModel.Model {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", types.NewError(errors.New("model was not authorized by contributor"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	selected, lookupErr := model.SharedModelForProvider(provider.ID, requestModel.Model)
+	if lookupErr != nil {
+		return "", types.NewError(errors.New("model not linked to selected endpoint"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	quote := provider
+	quote.Model = selected.Code
+	quote.InputPrice = selected.InputPrice
+	quote.OutputPrice = selected.OutputPrice
+	quote.MaxOutput = selected.MaxOutput
 	if model.SharedProtocol(provider.Protocol) == "responses" {
-		microEstimate, err = shareBoundedResponses(raw, provider)
+		microEstimate, err = shareBoundedResponses(raw, quote)
 	} else {
-		_, _, microEstimate, err = shareBoundedRequest(raw, provider)
+		_, _, microEstimate, err = shareBoundedRequest(raw, quote)
 	}
 	if err != nil {
 		return "", types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
