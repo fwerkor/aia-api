@@ -14,9 +14,10 @@ This repository contains the AIA API customizations to [New API](https://github.
 ## Automatic model-to-endpoint verification
 
 The admission flag (`shared_providers.accept_contributions`) is separate from
-the routing flag (`shared_providers.enabled`). The four built-in upstream
-templates accept API-key contributions by default, while routing remains off
-until an administrator reviews the provider terms and model pricing. Disabling
+the routing flag (`shared_providers.enabled`). The four built-in upstream templates are trusted routing candidates and
+accept contributions by default. Native channels are only created after a
+developer API key has passed model-specific validation. No channel exists
+merely because an endpoint is configured. Disabling
 contribution admission does **not** revoke previously approved routing.
 
 When a user submits an API key, the server:
@@ -33,9 +34,9 @@ When a user submits an API key, the server:
 4. Stores only successfully tested associations, encrypts the user key, and
    creates a standard New API channel exposing the verified models. Individual
    probe results are returned to the user; credentials are never included.
-5. If the administrator has not enabled routing, the contributed channel stays
-   disabled but the verified contribution is retained. Native forwarding
-   separately rejects models lacking verified catalog/native billing prices.
+5. An administrator may pause any endpoint independently of contribution
+   admission; its verified contributions are retained. A model without catalog
+   and native billing prices is excluded from actual routing.
 
 Each probe may consume the contributor's upstream API balance (at most eight
 short completions per submission). The service cannot discover or test model
@@ -53,13 +54,13 @@ Models and endpoints are now separate resources:
 
 Admin API: `GET /api/shared/admin/models`, `POST /api/shared/admin/models`, `PUT /api/shared/admin/models/:id`, `PUT /api/shared/admin/providers/:id/models`. Signed-in users can browse `GET /api/shared/models` independently of whether any upstream is enabled.
 
-Seeded model catalog: `deepseek-flash` (display: DeepSeek V4.1 Flash), `deepseek-v4-pro` (legacy compatibility), `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `claude-sonnet-4-6`, `claude-opus-4-8`, `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-4-argon`, `kimi-k2.5`. Official DeepSeek documentation specifies `deepseek-flash` as the API ID for DeepSeek V4.1 Flash, including the October 17 update. Missing reference prices are kept at zero until explicitly checked. Catalogue presence is not a claim that the model is callable through any particular provider. Prior four endpoint/model links migrate into the join table without enabling any endpoint or spending credentials.
+Seeded model catalog: `deepseek-flash` (display: DeepSeek V4.1 Flash), `deepseek-v4-pro` (legacy compatibility), `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `claude-sonnet-4-6`, `claude-opus-4-8`, `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-4-argon`, `kimi-k2.5`. Official DeepSeek documentation specifies `deepseek-flash` as the API ID for DeepSeek V4.1 Flash, including the October 17 update. Missing reference prices are kept at zero until explicitly checked. Catalogue presence is not a claim that the model is callable through any particular provider. Prior four endpoint/model links migrate into the join table without generating credentials or spending usage.
 
 Sources: [DeepSeek official API guide](https://api-docs.deepseek.com/zh-cn/), [DeepSeek updates](https://api-docs.deepseek.com/zh-cn/updates/), [OpenAI model list](https://developers.openai.com/api/docs/models), [Claude model IDs](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions), [Gemini models](https://ai.google.dev/gemini-api/docs/models).
 
 ## Built-in upstream API templates
 
-The following four provider templates are inserted idempotently into the administrator list. Their original model associations are migrated to the independent model catalog. **All start disabled**. These are official developer **API-key** products, not gateways into subscription/session/OAuth usage:
+The following four provider templates are inserted idempotently into the administrator list. Their original model associations are migrated to the independent model catalog. **All start enabled as potential upstreams**, but no consumer channel is available until a validated key has been contributed. These are official developer **API-key** products, not gateways into subscription/session/OAuth usage:
 
 | Label | Developer API base | Verification protocol | Example model |
 |---|---|---|---|

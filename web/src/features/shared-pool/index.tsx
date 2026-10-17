@@ -147,20 +147,17 @@ export function SharedPool() {
       <SectionPageLayout.Content>
         <div className="mx-auto w-full max-w-5xl space-y-6 p-4">
           <section className="rounded-xl border p-5 space-y-2">
-            <h2 className="text-lg font-semibold">
-              原生钱包余额：{usd(balance)}
-            </h2>
+            <h2 className="text-lg font-semibold">可用余额：{usd(balance)}</h2>
             <p className="text-sm text-muted-foreground">
-              贡献自己的 API Key 后，当其他用户实际使用该 Key 时获得共享积分。
-              奖励直接记入原生钱包，与现有 /v1 API 调用使用同一额度。
+              选择模型即可调用，平台会自动分配可用渠道。贡献闲置的 API
+              Key，也可以获得额度奖励。 奖励直接计入可用余额。
             </p>
             <p className="text-sm">
-              共享 API 地址：
+              统一 API 地址：
               <code className="select-all">https://api.nju-aia.com/v1</code>
             </p>
             <p className="text-sm">
-              使用现有 API Token，兼容 OpenAI Chat
-              Completions。支持文本请求与流式输出。
+              继续使用现有 API Token，无需选择上游服务。
             </p>
             <p className="text-xs text-muted-foreground">
               请注意：共享资源池的上游服务可能处理和记录你发送的提示词。不要发送私密内容。
@@ -174,8 +171,7 @@ export function SharedPool() {
           <section className="rounded-xl border p-5 space-y-3">
             <h2 className="text-lg font-semibold">模型目录</h2>
             <p className="text-sm text-muted-foreground">
-              模型独立于上游
-              Endpoint；被绑定且有可用渠道后才可调用。价格为参考配置，未核价显示“待核价”。
+              按模型名称调用即可，平台自动选择支持该模型的可用渠道。
             </p>
             <div className="grid gap-2 md:grid-cols-2">
               {catalog.map((m) => (
@@ -222,7 +218,7 @@ export function SharedPool() {
               }}
             >
               <label className={labelStyle}>
-                上游 Endpoint
+                Key 所属服务
                 <select
                   className={"mt-1 w-full " + inputStyle}
                   required
@@ -235,10 +231,7 @@ export function SharedPool() {
                   <option value="">请选择</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name}{" "}
-                      {p.enabled
-                        ? "（已开放调用）"
-                        : "（接受贡献，待开放调用）"}
+                      {p.name}
                     </option>
                   ))}
                 </select>

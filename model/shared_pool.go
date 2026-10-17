@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -73,14 +74,13 @@ func SharedMigrate() error {
 	return SharedCatalogMigrate()
 }
 
-// Official API-key gateways. Deliberately disabled until upstream consent and
-// platform pricing are reviewed. Subscription/OAuth quotas are not transferable.
+// Built-in trusted upstream gateways. Their actual channels exist only after a key passes verification.
 func SharedSeedProviderTemplates() error {
 	templates := []SharedProvider{
-		{Name: "OpenCode Zen API Key（非订阅）", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat"},
-		{Name: "Codex 开发者 API（非 ChatGPT 订阅）", BaseURL: "https://api.openai.com/v1", Protocol: "responses"},
-		{Name: "Claude Code 开发者 API（非 Claude 订阅）", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic"},
-		{Name: "Antigravity 相关 Gemini API（非 IDE 配额）", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini"},
+		{Name: "OpenCode Zen", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat", Enabled: true, AcceptContributions: true},
+		{Name: "OpenAI / Codex", BaseURL: "https://api.openai.com/v1", Protocol: "responses", Enabled: true, AcceptContributions: true},
+		{Name: "Claude / Claude Code", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", Enabled: true, AcceptContributions: true},
+		{Name: "Gemini / Antigravity", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini", Enabled: true, AcceptContributions: true},
 	}
 	for _, tpl := range templates {
 		var found SharedProvider
@@ -103,7 +103,7 @@ func SharedProtocol(p string) string {
 	}
 	return p
 }
-func SharedChannelSupportsPath(channelID int, path string) bool {
+func SharedChannelSupportsPath(channelID int, path string, modelCode ...string) bool {
 	var item SharedContribution
 	if err := DB.Select("provider_id").Where("channel_id = ?", channelID).First(&item).Error; err != nil {
 		return false
@@ -113,9 +113,22 @@ func SharedChannelSupportsPath(channelID int, path string) bool {
 		return false
 	}
 	if SharedProtocol(p.Protocol) == "responses" {
-		return path == "/v1/responses"
+		if path != "/v1/responses" {
+			return false
+		}
+	} else if path != "/v1/chat/completions" {
+		return false
 	}
-	return path == "/v1/chat/completions"
+	if len(modelCode) > 0 && modelCode[0] != "" {
+		m, err := SharedModelForProvider(p.ID, modelCode[0])
+		if err != nil || m.InputPrice <= 0 || m.OutputPrice <= 0 {
+			return false
+		}
+		price, hasPrice := ratio_setting.GetModelPrice(m.Code, false)
+		ratio, hasRatio, _ := ratio_setting.GetModelRatio(m.Code)
+		return (hasPrice && price > 0) || (hasRatio && ratio > 0)
+	}
+	return true
 }
 
 func SharedKeyMarker(id uint) string { return fmt.Sprintf("aia-shared:%d", id) }

@@ -123,7 +123,7 @@ func TestSharedAPITemplateMigration(t *testing.T) {
 		}
 		expected, ok := want[code]
 		require.True(t, ok)
-		require.False(t, p.Enabled)
+		require.True(t, p.Enabled)
 		require.Equal(t, expected.protocol, p.Protocol)
 		require.Equal(t, expected.url, p.BaseURL)
 		item := SharedContribution{OwnerID: idx + 1, ProviderID: p.ID, Models: code, Enabled: true,
@@ -191,7 +191,8 @@ func TestSharedPendingContributionDoesNotActivateRelay(t *testing.T) {
 	require.NoError(t, SharedMigrate())
 	var p SharedProvider
 	require.NoError(t, db.Where("protocol = ?", "chat").First(&p).Error)
-	require.False(t, p.Enabled)
+	require.NoError(t, db.Model(&SharedProvider{}).Where("id = ?", p.ID).Update("enabled", false).Error)
+	p.Enabled = false
 	require.True(t, p.AcceptContributions)
 	var selected SharedModel
 	require.NoError(t, db.Where("code = ?", "deepseek-flash").First(&selected).Error)

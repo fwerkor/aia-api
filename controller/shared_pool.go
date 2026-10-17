@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -250,7 +249,7 @@ func SharedAdminCreateProvider(c *gin.Context) {
 	}
 	p.BaseURL = endpoint
 	p.ID = 0
-	p.Enabled = false // admin enables only after checking contract and pricing
+	p.Enabled = true // provider is eligible for routing once verified keys exist
 	if err := model.DB.Create(&p).Error; err != nil {
 		shareError(c, 409, "model already registered or database error")
 		return
@@ -291,30 +290,6 @@ func SharedAdminEnableProvider(c *gin.Context) {
 		if result.Error != nil || result.RowsAffected != 1 {
 			shareError(c, 404, "endpoint not found")
 			return
-		}
-	}
-	if body.Enabled {
-		var p model.SharedProvider
-		if err := model.DB.First(&p, id).Error; err != nil {
-			shareError(c, 404, "provider not found")
-			return
-		}
-		bindings, err := model.SharedProviderModels(p.ID, true)
-		if err != nil || len(bindings) == 0 {
-			shareError(c, 400, "link at least one active model")
-			return
-		}
-		for _, m := range bindings {
-			if m.InputPrice <= 0 || m.OutputPrice <= 0 || m.MaxOutput <= 0 {
-				shareError(c, 400, "verify catalog model pricing before enabling")
-				return
-			}
-			nativePrice, hasPrice := ratio_setting.GetModelPrice(m.Code, false)
-			nativeRatio, hasRatio, _ := ratio_setting.GetModelRatio(m.Code)
-			if (!hasPrice || nativePrice <= 0) && (!hasRatio || nativeRatio <= 0) {
-				shareError(c, 400, "configure New API native price for model: "+m.Code)
-				return
-			}
 		}
 	}
 	if err := model.SharedSetProviderEnabled(uint(id), body.Enabled); err != nil {
