@@ -86,7 +86,7 @@ func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *mo
 	}
 	// Reserve a conservative quota bound based on the configured endpoint's
 	// prices. New API remains the only party consuming the user's wallet.
-	reserved := int64(math.Ceil(float64(microEstimate) * common.QuotaPerUnit / 1000000))
+	reserved := int64(math.Ceil(float64(microEstimate) * common.QuotaPerUnit / 7000000))
 	if nativeEstimate := int64(info.PriceData.QuotaToPreConsume); nativeEstimate > reserved {
 		reserved = nativeEstimate
 	}
@@ -143,6 +143,6 @@ func shareBoundedResponses(raw []byte, p model.SharedProvider) (int64, error) {
 			return 0, errors.New("invalid stream")
 		}
 	}
-	estimatedUSD := (float64(len(raw)+2048)*p.InputPrice*2 + float64(maxOutput)*p.OutputPrice*3) / 1e6
-	return int64(math.Ceil(estimatedUSD * 1e6)), nil
+	estimatedRMB := (float64(len(raw)+2048)*p.InputPrice*2 + float64(maxOutput)*p.OutputPrice*3) / 1e6
+	return int64(math.Ceil(estimatedRMB * 1e6)), nil
 }

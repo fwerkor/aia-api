@@ -46,7 +46,7 @@ type Charge = {
   status: string;
   created_at: string;
 };
-const usd = (quota: number) => "$" + (quota / 500_000).toFixed(5);
+const cny = (quota: number) => "¥" + ((quota * 7) / 500_000).toFixed(3);
 const inputStyle =
   "min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm";
 const labelStyle = "text-sm font-medium";
@@ -87,17 +87,6 @@ export function SharedPool() {
     base_url: "",
     protocol: "chat",
   });
-  const [newModel, setNewModel] = useState({
-    code: "",
-    name: "",
-    protocol: "chat",
-    input_price: "0",
-    output_price: "0",
-    max_output: "2048",
-  });
-  const [modelEdits, setModelEdits] = useState<
-    Record<number, { input: string; output: string }>
-  >({});
   const isAdmin =
     (useAuthStore((s) => s.auth.user?.role) ?? 0) >= ROLE.SUPER_ADMIN;
   const fetchData = useCallback(async () => {
@@ -147,7 +136,7 @@ export function SharedPool() {
       <SectionPageLayout.Content>
         <div className="mx-auto w-full max-w-5xl space-y-6 p-4">
           <section className="rounded-xl border p-5 space-y-2">
-            <h2 className="text-lg font-semibold">可用余额：{usd(balance)}</h2>
+            <h2 className="text-lg font-semibold">可用余额：{cny(balance)}</h2>
             <p className="text-sm text-muted-foreground">
               选择模型即可调用，平台会自动分配可用渠道。贡献闲置的 API
               Key，也可以获得额度奖励。 奖励直接计入可用余额。
@@ -176,15 +165,15 @@ export function SharedPool() {
             <div className="grid gap-2 md:grid-cols-2">
               {catalog.map((m) => (
                 <div key={m.id} className="rounded-lg bg-muted/40 p-3 text-sm">
-                  <div className="font-medium">{m.name}</div>
+                  <div className="font-medium">{m.code}</div>
                   <div className="text-muted-foreground">
                     {m.code} · {m.protocol}
                   </div>
                   <div className="text-muted-foreground">
                     {m.input_price > 0 && m.output_price > 0
-                      ? "$" +
+                      ? "¥" +
                         m.input_price +
-                        " / $" +
+                        " / ¥" +
                         m.output_price +
                         " / MTok"
                       : "待核价"}
@@ -209,7 +198,7 @@ export function SharedPool() {
                     provider_id: Number(providerID),
                     models: autoProbe ? [] : selectedModels,
                     key,
-                    daily_limit: Math.round(Number(dailyLimit) * 500_000),
+                    daily_limit: Math.round((Number(dailyLimit) * 500_000) / 7),
                   });
                   setProbeResults(response.data.probes ?? []);
                   setKey("");
@@ -273,7 +262,7 @@ export function SharedPool() {
                           )
                         }
                       />
-                      {m.name}{" "}
+                      {m.code}{" "}
                       <span className="text-muted-foreground">({m.code})</span>
                     </label>
                   ))}
@@ -287,7 +276,7 @@ export function SharedPool() {
                   )}
               </div>
               <label className={labelStyle}>
-                每日最大共享成本（美元）
+                每日共享额度上限（元）
                 <Input
                   className="mt-1"
                   type="number"
@@ -351,8 +340,8 @@ export function SharedPool() {
                   <strong>{keyItem.models || "未选择模型"}</strong>
                   <span className="ml-3">{keyItem.key_hint}</span>
                   <p className="text-muted-foreground">
-                    今日已使用 {usd(keyItem.daily_used)} /{" "}
-                    {usd(keyItem.daily_limit)}；预留 {usd(keyItem.reserved)}
+                    今日已使用 {cny(keyItem.daily_used)} /{" "}
+                    {cny(keyItem.daily_limit)}；预留 {cny(keyItem.reserved)}
                   </p>
                 </div>
                 <div className="flex gap-2">
@@ -418,7 +407,7 @@ export function SharedPool() {
                   )[ch.direction] ?? ch.direction}{" "}
                   · {ch.status}
                 </span>
-                <span>{usd(ch.charged)}</span>
+                <span>{cny(ch.charged)}</span>
                 <span className="text-muted-foreground">
                   {new Date(ch.created_at).toLocaleString()}
                 </span>
@@ -441,7 +430,9 @@ export function SharedPool() {
                       () =>
                         api.post("/api/shared/admin/grants", {
                           user_id: Number(grantUser),
-                          quota: Math.round(Number(grantAmount) * 500_000),
+                          quota: Math.round(
+                            (Number(grantAmount) * 500_000) / 7,
+                          ),
                           reference: grantRef,
                         }),
                       "积分发放成功",
@@ -459,7 +450,7 @@ export function SharedPool() {
                     />
                   </label>
                   <label className={labelStyle}>
-                    美元等值积分
+                    人民币额度（元）
                     <Input
                       required
                       type="number"
@@ -484,189 +475,8 @@ export function SharedPool() {
                   </Button>
                 </form>
               </div>
-              <h2 className="text-lg font-semibold">管理员：独立模型目录</h2>
-              <p className="text-xs text-muted-foreground">
-                模型独立维护 API
-                ID、协议、参考价格和输出上限；模型目录并不保证任一上游都支持该模型。
-              </p>
-              <form
-                className="grid gap-3 md:grid-cols-3"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void mutate(
-                    () =>
-                      api.post("/api/shared/admin/models", {
-                        ...newModel,
-                        input_price: Number(newModel.input_price),
-                        output_price: Number(newModel.output_price),
-                        max_output: Number(newModel.max_output),
-                      }),
-                    "模型已加入目录",
-                  );
-                }}
-              >
-                {(
-                  [
-                    "code",
-                    "name",
-                    "input_price",
-                    "output_price",
-                    "max_output",
-                  ] as const
-                ).map((field) => (
-                  <label key={field} className={labelStyle}>
-                    {
-                      {
-                        code: "API 模型 ID",
-                        name: "模型显示名称",
-                        input_price: "输入 $/MTok",
-                        output_price: "输出 $/MTok",
-                        max_output: "输出 Token 上限",
-                      }[field]
-                    }
-                    <Input
-                      className="mt-1"
-                      required
-                      value={newModel[field]}
-                      onChange={(e) =>
-                        setNewModel((prev) => ({
-                          ...prev,
-                          [field]: e.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                ))}
-                <label className={labelStyle}>
-                  协议
-                  <select
-                    className={"mt-1 w-full " + inputStyle}
-                    value={newModel.protocol}
-                    onChange={(e) =>
-                      setNewModel((prev) => ({
-                        ...prev,
-                        protocol: e.target.value,
-                      }))
-                    }
-                  >
-                    <option value="chat">Chat</option>
-                    <option value="responses">Responses</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="gemini">Gemini</option>
-                  </select>
-                </label>
-                <div>
-                  <Button disabled={busy} type="submit">
-                    新增模型
-                  </Button>
-                </div>
-              </form>
-              <div className="space-y-2">
-                {adminCatalog.map((m) => (
-                  <div
-                    key={m.id}
-                    className="rounded-md border p-3 text-sm space-y-2"
-                  >
-                    <div className="font-medium">
-                      {m.name}{" "}
-                      <span className="text-muted-foreground">
-                        ({m.code}, {m.protocol})
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2 items-end">
-                      <label>
-                        输入 $/MTok
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.000001"
-                          className="w-28"
-                          value={
-                            modelEdits[m.id]?.input ?? String(m.input_price)
-                          }
-                          onChange={(e) =>
-                            setModelEdits((prev) => ({
-                              ...prev,
-                              [m.id]: {
-                                input: e.target.value,
-                                output:
-                                  prev[m.id]?.output ?? String(m.output_price),
-                              },
-                            }))
-                          }
-                        />
-                      </label>
-                      <label>
-                        输出 $/MTok
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.000001"
-                          className="w-28"
-                          value={
-                            modelEdits[m.id]?.output ?? String(m.output_price)
-                          }
-                          onChange={(e) =>
-                            setModelEdits((prev) => ({
-                              ...prev,
-                              [m.id]: {
-                                input:
-                                  prev[m.id]?.input ?? String(m.input_price),
-                                output: e.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      </label>
-                      <Button
-                        disabled={busy}
-                        variant="outline"
-                        onClick={() =>
-                          void mutate(
-                            () =>
-                              api.put("/api/shared/admin/models/" + m.id, {
-                                name: m.name,
-                                enabled: m.enabled,
-                                max_output: m.max_output,
-                                input_price: Number(
-                                  modelEdits[m.id]?.input ?? m.input_price,
-                                ),
-                                output_price: Number(
-                                  modelEdits[m.id]?.output ?? m.output_price,
-                                ),
-                              }),
-                            "模型计费已更新",
-                          )
-                        }
-                      >
-                        保存价格
-                      </Button>
-                      <Button
-                        disabled={busy}
-                        variant="outline"
-                        onClick={() =>
-                          void mutate(
-                            () =>
-                              api.put("/api/shared/admin/models/" + m.id, {
-                                name: m.name,
-                                enabled: !m.enabled,
-                                max_output: m.max_output,
-                                input_price: Number(
-                                  modelEdits[m.id]?.input ?? m.input_price,
-                                ),
-                                output_price: Number(
-                                  modelEdits[m.id]?.output ?? m.output_price,
-                                ),
-                              }),
-                            "模型状态已更新",
-                          )
-                        }
-                      >
-                        {m.enabled ? "停用" : "启用"}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+              <div className="text-sm text-muted-foreground">
+                模型管理请使用站内统一的模型管理页面；此处仅管理贡献来源。
               </div>
               <h2 className="text-lg font-semibold">管理员：上游 Endpoint</h2>
               <p className="text-xs text-muted-foreground">
@@ -758,7 +568,7 @@ export function SharedPool() {
                         .filter((m) => m.protocol === p.protocol)
                         .map((m) => (
                           <option key={m.id} value={m.id}>
-                            {m.name} ({m.code})
+                            {m.code} ({m.code})
                           </option>
                         ))}
                     </select>

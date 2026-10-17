@@ -10,11 +10,12 @@ import (
 type SharedModel struct {
 	ID          uint    `json:"id" gorm:"primaryKey"`
 	Code        string  `json:"code" gorm:"uniqueIndex;not null"`
-	Name        string  `json:"name"`
+	Name        string  `json:"-"`
 	Protocol    string  `json:"protocol"`
 	InputPrice  float64 `json:"input_price"`
 	OutputPrice float64 `json:"output_price"`
 	MaxOutput   int     `json:"max_output"`
+	Currency    string  `json:"currency" gorm:"default:USD"`
 	Enabled     bool    `json:"enabled"`
 }
 
@@ -68,6 +69,7 @@ func SharedCatalogMigrate() error {
 	// initial many-to-many links without putting models into endpoint records.
 	defaults := []struct{ baseURL, code string }{
 		{"https://opencode.ai/zen/v1", "kimi-k2.5"},
+		{"https://opencode.ai/zen/go/v1", "deepseek-flash"},
 		{"https://api.openai.com/v1", "gpt-6-sol"},
 		{"https://api.anthropic.com/v1", "claude-sonnet-4-6"},
 		{"https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"},
@@ -83,6 +85,21 @@ func SharedCatalogMigrate() error {
 		}
 		link := SharedProviderModel{ProviderID: provider.ID, ModelID: m.ID, Enabled: true}
 		if err := DB.Where("provider_id = ? AND model_id = ?", provider.ID, m.ID).FirstOrCreate(&link).Error; err != nil {
+			return err
+		}
+	}
+	// Set estimated, rounded CNY prices once, preserving subsequent manual edits.
+	// Legacy prices were stored as USD per million tokens.
+	prices := map[string][2]float64{
+		"deepseek-flash": {2, 8}, "deepseek-v4-pro": {9, 28},
+		"gpt-6.1-sol": {14, 70}, "gpt-6-sol": {14, 70}, "gpt-6-luna": {1, 4},
+		"claude-sonnet-4-6": {21, 105}, "claude-opus-4-8": {35, 175},
+		"gemini-3.8-flash": {5, 26}, "gemini-3.6-flash": {3, 15},
+		"gemini-4-argon": {14, 70}, "kimi-k2.5": {4, 21},
+	}
+	for code, price := range prices {
+		if err := DB.Model(&SharedModel{}).Where("code = ? AND (currency = ? OR currency IS NULL OR currency = ?)", code, "USD", "").
+			Updates(map[string]any{"input_price": price[0], "output_price": price[1], "currency": "CNY", "name": code}).Error; err != nil {
 			return err
 		}
 	}

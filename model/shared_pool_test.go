@@ -90,18 +90,18 @@ func TestSharedAPITemplateMigration(t *testing.T) {
 	require.NoError(t, SharedMigrate())
 	var providers []SharedProvider
 	require.NoError(t, db.Order("id").Find(&providers).Error)
-	require.Len(t, providers, 4)
+	require.Len(t, providers, 5)
 	var models []SharedModel
 	require.NoError(t, db.Order("id").Find(&models).Error)
 	require.GreaterOrEqual(t, len(models), 11)
 	var deepseek SharedModel
 	require.NoError(t, db.Where("code = ?", "deepseek-flash").First(&deepseek).Error)
-	require.Equal(t, "DeepSeek V4.1 Flash", deepseek.Name)
-	require.EqualValues(t, 0, deepseek.InputPrice)
+	require.Equal(t, "deepseek-flash", deepseek.Name)
+	require.EqualValues(t, 2, deepseek.InputPrice)
 	require.True(t, deepseek.Enabled)
 	var modelLinks []SharedProviderModel
 	require.NoError(t, db.Find(&modelLinks).Error)
-	require.Len(t, modelLinks, 4)
+	require.Len(t, modelLinks, 5)
 	want := map[string]struct {
 		protocol, url string
 		kind          int
@@ -109,6 +109,7 @@ func TestSharedAPITemplateMigration(t *testing.T) {
 		channelURL    string
 	}{
 		"kimi-k2.5":         {"chat", "https://opencode.ai/zen/v1", constant.ChannelTypeOpenAI, "/v1/chat/completions", "https://opencode.ai/zen"},
+		"deepseek-flash":    {"chat", "https://opencode.ai/zen/go/v1", constant.ChannelTypeOpenAI, "/v1/chat/completions", "https://opencode.ai/zen/go"},
 		"gpt-6-sol":         {"responses", "https://api.openai.com/v1", constant.ChannelTypeOpenAI, "/v1/responses", "https://api.openai.com"},
 		"claude-sonnet-4-6": {"anthropic", "https://api.anthropic.com/v1", constant.ChannelTypeAnthropic, "/v1/chat/completions", "https://api.anthropic.com"},
 		"gemini-3.8-flash":  {"gemini", "https://generativelanguage.googleapis.com/v1beta/openai", constant.ChannelTypeGemini, "/v1/chat/completions", "https://generativelanguage.googleapis.com"},
@@ -170,11 +171,11 @@ func TestSharedModelCatalogManyToMany(t *testing.T) {
 	}
 	list, err := SharedProvidersWithModels(false)
 	require.NoError(t, err)
-	require.Len(t, list, 6)
-	require.Len(t, list[4].Models, 2)
-	require.Len(t, list[5].Models, 1)
-	require.Error(t, SharedBindProviderModel(list[4].ID, flash.ID, false))
-	found, err := SharedModelForProvider(list[5].ID, flash.Code)
+	require.Len(t, list, 7)
+	require.Len(t, list[5].Models, 2)
+	require.Len(t, list[6].Models, 1)
+	require.Error(t, SharedBindProviderModel(list[5].ID, flash.ID, false))
+	found, err := SharedModelForProvider(list[6].ID, flash.Code)
 	require.NoError(t, err)
 	require.Equal(t, flash.Code, found.Code)
 }
@@ -212,6 +213,15 @@ func TestSharedPendingContributionDoesNotActivateRelay(t *testing.T) {
 	require.NoError(t, SharedSetProviderEnabled(p.ID, true))
 	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
 	require.True(t, ability.Enabled)
+	require.True(t, SharedChannelAvailable(item.ChannelID))
+	require.True(t, SharedCooldownChannel(item.ChannelID, 429, "quota exceeded"))
+	require.False(t, SharedChannelAvailable(item.ChannelID))
+	var paused Channel
+	require.NoError(t, db.First(&paused, item.ChannelID).Error)
+	require.Equal(t, common.ChannelStatusEnabled, paused.Status)
+	require.NoError(t, db.Model(&SharedContribution{}).Where("id = ?", item.ID).
+		Update("cooldown_until", time.Now().Add(-time.Second).Unix()).Error)
+	require.True(t, SharedChannelAvailable(item.ChannelID))
 	require.NoError(t, SharedSetProviderEnabled(p.ID, false))
 	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
 	require.False(t, ability.Enabled)

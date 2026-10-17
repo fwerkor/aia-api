@@ -98,9 +98,6 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 }
 
 func SubscriptionRequestBalancePay(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	userId := c.GetInt("id")
 	var req SubscriptionBalancePayRequest
@@ -139,9 +136,6 @@ type AdminUpsertSubscriptionPlanRequest struct {
 }
 
 func AdminCreateSubscriptionPlan(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	var req AdminUpsertSubscriptionPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -214,9 +208,6 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 }
 
 func AdminUpdateSubscriptionPlan(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
@@ -326,9 +317,6 @@ type AdminUpdateSubscriptionPlanStatusRequest struct {
 }
 
 func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
@@ -354,9 +342,6 @@ type AdminBindSubscriptionRequest struct {
 }
 
 func AdminBindSubscription(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	var req AdminBindSubscriptionRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.UserId <= 0 || req.PlanId <= 0 {
@@ -419,9 +404,6 @@ func recordSubscriptionResetUserLogs(result *model.SubscriptionResetResult, admi
 
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
 func AdminCreateUserSubscription(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
 
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {

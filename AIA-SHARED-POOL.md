@@ -130,3 +130,13 @@ The existing AIA concurrent-active-subscription purchase-limit fix is retained i
 ## License and upstream attribution
 
 Based on the New API project at https://github.com/QuantumNous/new-api (base revision `0ab02020603d22e5613bc4cf46bfab06f8567769`). This derivative retains original AGPL notices and third-party credits. `LICENSE` governs redistribution and network deployment source availability.
+
+## AIA-only simplified deployment (October 2026)
+
+- Account creation and login are through the configured **AIA Forum OIDC** provider. The native password/sign-up endpoints and pages are disabled; forum first-login account provisioning remains available.
+- Commercial top-ups, online payment gateways/webhooks, invite kickbacks, daily check-ins and commercial subscription purchases are removed. Existing subscription usage rights and historic database records remain intact.
+- **Redemption codes remain supported** through the existing `POST /api/user/topup` redemption handler and the `/wallet` balance/redeem page.
+- The 11 model IDs in the shared catalogue are the native New API default model pricing set. Display names are not required. Prices are reference rounded **CNY per million input/output tokens**, with the native 500,000 quota-unit denominator preserved for existing accounts. Default accounting uses a nominal 7 CNY per USD historical unit.
+- Quota exhaustion or 429 responses temporarily cool down a contributed channel for 5–30 minutes. It is automatically eligible again after the cooldown; the credential is not permanently disabled on transient lack of quota.
+- [OpenCode Go](https://docs.opencode.ai/docs/go/) is the confirmed official subscription endpoint at `https://opencode.ai/zen/go/v1`, using the user's Go plan API key. The catalogue `deepseek-flash` model maps to OpenCode Go's `deepseek-v4.1-flash` model ID. No browser cookies or IDE refresh tokens are accepted.
+- New API separately has a built-in Codex OAuth channel adapter. Linking third-party subscription/OAuth accounts to shared-key contribution requires a provider-supported authorization flow; an ordinary OpenAI API endpoint is not equivalent to Codex, Claude Code, or Antigravity subscriptions. Do not treat those API endpoints as subscription usage.

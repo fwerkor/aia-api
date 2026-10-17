@@ -78,9 +78,10 @@ func SharedMigrate() error {
 func SharedSeedProviderTemplates() error {
 	templates := []SharedProvider{
 		{Name: "OpenCode Zen", BaseURL: "https://opencode.ai/zen/v1", Protocol: "chat", Enabled: true, AcceptContributions: true},
-		{Name: "OpenAI / Codex", BaseURL: "https://api.openai.com/v1", Protocol: "responses", Enabled: true, AcceptContributions: true},
-		{Name: "Claude / Claude Code", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", Enabled: true, AcceptContributions: true},
-		{Name: "Gemini / Antigravity", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini", Enabled: true, AcceptContributions: true},
+		{Name: "OpenCode Go（订阅）", BaseURL: "https://opencode.ai/zen/go/v1", Protocol: "chat", Enabled: true, AcceptContributions: true},
+		{Name: "OpenAI", BaseURL: "https://api.openai.com/v1", Protocol: "responses", Enabled: true, AcceptContributions: true},
+		{Name: "Anthropic", BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", Enabled: true, AcceptContributions: true},
+		{Name: "Google Gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Protocol: "gemini", Enabled: true, AcceptContributions: true},
 	}
 	for _, tpl := range templates {
 		var found SharedProvider
@@ -207,6 +208,10 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 	channel := &Channel{Type: channelType, Key: "aia-shared:pending",
 		Status: status, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Name, item.OwnerID),
 		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: item.Models, Group: "default"}
+	if provider.BaseURL == "https://opencode.ai/zen/go/v1" {
+		mapping := `{"deepseek-flash":"deepseek-v4.1-flash"}`
+		channel.ModelMapping = &mapping
+	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(item).Error; err != nil {
 			return err
@@ -274,6 +279,37 @@ func SharedSetEnabled(ownerID int, id uint, enabled bool, dailyLimit int64, revo
 		InitChannelCache()
 	}
 	return err
+}
+
+// Transient provider quota/rate failures must not disable an encrypted
+// contributed key. The cooldown expires on its own; no scheduler state needs
+// rebuilding, and a later successful request can use the same credential.
+func SharedCooldownChannel(channelID int, status int, message string) bool {
+	var item SharedContribution
+	if err := DB.Select("id").Where("channel_id = ?", channelID).First(&item).Error; err != nil {
+		return false
+	}
+	text := strings.ToLower(message)
+	temporary := status == 429 || status == 402 ||
+		((status == 403 || status == 400 || status == 0) &&
+			(strings.Contains(text, "quota") || strings.Contains(text, "credit") ||
+				strings.Contains(text, "balance") || strings.Contains(text, "rate limit") ||
+				strings.Contains(text, "额度") || strings.Contains(text, "余额")))
+	if !temporary {
+		return false
+	}
+	duration := int64(300)
+	if status == 402 || strings.Contains(text, "insufficient") ||
+		strings.Contains(text, "exhaust") || strings.Contains(text, "额度不足") ||
+		strings.Contains(text, "余额不足") {
+		duration = 1800
+	}
+	until := time.Now().Unix() + duration
+	if err := DB.Model(&SharedContribution{}).Where("id = ?", item.ID).
+		Update("cooldown_until", gorm.Expr("CASE WHEN cooldown_until > ? THEN cooldown_until ELSE ? END", until, until)).Error; err != nil {
+		return false
+	}
+	return true
 }
 
 func SharedReserveChannel(channelID, userID int, requestID string, amount int64) (bool, error) {

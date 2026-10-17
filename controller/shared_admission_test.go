@@ -36,12 +36,12 @@ func TestSharedContributionsVisibleBeforeRoutingEnabled(t *testing.T) {
 		return body.Data
 	}
 	items := run()
-	require.Len(t, items, 4)
+	require.Len(t, items, 5)
 	for _, item := range items {
 		require.True(t, item.Enabled)
 		require.True(t, item.AcceptContributions)
 		require.NotEmpty(t, item.Models)
 	}
 	require.NoError(t, db.Model(&model.SharedProvider{}).Where("id = ?", items[0].ID).Update("accept_contributions", false).Error)
-	require.Len(t, run(), 3)
+	require.Len(t, run(), 4)
 }

@@ -32,13 +32,15 @@ func SharedAdminCreateModel(c *gin.Context) {
 		shareError(c, 400, "invalid model")
 		return
 	}
-	if !sharedModelCodePattern.MatchString(data.Code) || len(strings.TrimSpace(data.Name)) == 0 || len(data.Name) > 120 ||
+	if !sharedModelCodePattern.MatchString(data.Code) ||
 		(data.Protocol != "chat" && data.Protocol != "responses" && data.Protocol != "anthropic" && data.Protocol != "gemini") ||
 		data.MaxOutput < 16 || data.MaxOutput > 131072 || !sharedValidPrice(data.InputPrice, data.OutputPrice) {
 		shareError(c, 400, "invalid model ID, protocol, output limit or price")
 		return
 	}
 	data.ID = 0
+	data.Name = data.Code
+	data.Currency = "CNY"
 	data.Enabled = true
 	if err := model.DB.Create(&data).Error; err != nil {
 		shareError(c, 409, "model already exists")
@@ -63,8 +65,7 @@ func SharedAdminUpdateModel(c *gin.Context) {
 		OutputPrice float64 `json:"output_price"`
 		MaxOutput   int     `json:"max_output"`
 	}
-	if err := c.ShouldBindJSON(&patch); err != nil || patch.Enabled == nil || len(strings.TrimSpace(patch.Name)) == 0 ||
-		len(patch.Name) > 120 || !sharedValidPrice(patch.InputPrice, patch.OutputPrice) || patch.MaxOutput < 16 || patch.MaxOutput > 131072 {
+	if err := c.ShouldBindJSON(&patch); err != nil || patch.Enabled == nil || !sharedValidPrice(patch.InputPrice, patch.OutputPrice) || patch.MaxOutput < 16 || patch.MaxOutput > 131072 {
 		shareError(c, 400, "invalid model settings")
 		return
 	}
@@ -83,7 +84,7 @@ func SharedAdminUpdateModel(c *gin.Context) {
 			return
 		}
 	}
-	values := map[string]any{"name": patch.Name, "enabled": *patch.Enabled, "input_price": patch.InputPrice,
+	values := map[string]any{"enabled": *patch.Enabled, "input_price": patch.InputPrice,
 		"output_price": patch.OutputPrice, "max_output": patch.MaxOutput}
 	result := model.DB.Model(&model.SharedModel{}).Where("id = ?", id).Updates(values)
 	if result.Error != nil || result.RowsAffected != 1 {
