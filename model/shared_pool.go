@@ -18,15 +18,16 @@ import (
 )
 
 type SharedProvider struct {
-	ID          uint    `json:"id" gorm:"primaryKey"`
-	Name        string  `json:"name"`
-	BaseURL     string  `json:"base_url"`
-	Protocol    string  `json:"protocol" gorm:"default:chat"`
-	Model       string  `json:"-"`
-	InputPrice  float64 `json:"input_price"`
-	OutputPrice float64 `json:"output_price"`
-	MaxOutput   int     `json:"max_output"`
-	Enabled     bool    `json:"enabled"`
+	ID                  uint    `json:"id" gorm:"primaryKey"`
+	Name                string  `json:"name"`
+	BaseURL             string  `json:"base_url"`
+	Protocol            string  `json:"protocol" gorm:"default:chat"`
+	Model               string  `json:"-"`
+	InputPrice          float64 `json:"input_price"`
+	OutputPrice         float64 `json:"output_price"`
+	MaxOutput           int     `json:"max_output"`
+	Enabled             bool    `json:"enabled"`
+	AcceptContributions bool    `json:"accept_contributions" gorm:"default:true"`
 }
 
 type SharedContribution struct {
@@ -186,8 +187,12 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 	default:
 		return errors.New("unsupported provider protocol")
 	}
+	status := common.ChannelStatusManuallyDisabled
+	if provider.Enabled && item.Enabled {
+		status = common.ChannelStatusEnabled
+	}
 	channel := &Channel{Type: channelType, Key: "aia-shared:pending",
-		Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Name, item.OwnerID),
+		Status: status, Name: fmt.Sprintf("AIA shared %s · user %d", provider.Name, item.OwnerID),
 		CreatedTime: time.Now().Unix(), BaseURL: &base, Models: item.Models, Group: "default"}
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(item).Error; err != nil {
@@ -201,7 +206,13 @@ func SharedCreateContribution(item *SharedContribution, provider SharedProvider)
 		if err := tx.Model(item).Update("channel_id", channel.Id).Error; err != nil {
 			return err
 		}
-		return channel.AddAbilities(tx)
+		if err := channel.AddAbilities(tx); err != nil {
+			return err
+		}
+		if !provider.Enabled || !item.Enabled {
+			return tx.Model(&Ability{}).Where("channel_id = ?", channel.Id).Update("enabled", false).Error
+		}
+		return nil
 	})
 	if err == nil {
 		InitChannelCache()
@@ -233,13 +244,18 @@ func SharedSetEnabled(ownerID int, id uint, enabled bool, dailyLimit int64, revo
 			return err
 		}
 		status := common.ChannelStatusManuallyDisabled
-		if enabled {
+		var provider SharedProvider
+		if err := tx.First(&provider, item.ProviderID).Error; err != nil {
+			return err
+		}
+		live := enabled && provider.Enabled
+		if live {
 			status = common.ChannelStatusEnabled
 		}
 		if err := tx.Model(&Channel{}).Where("id = ?", item.ChannelID).Update("status", status).Error; err != nil {
 			return err
 		}
-		return tx.Model(&Ability{}).Where("channel_id = ?", item.ChannelID).Update("enabled", enabled).Error
+		return tx.Model(&Ability{}).Where("channel_id = ?", item.ChannelID).Update("enabled", live).Error
 	})
 	if err == nil {
 		InitChannelCache()

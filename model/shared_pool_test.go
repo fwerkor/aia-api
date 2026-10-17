@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"testing"
 	"time"
@@ -176,4 +177,41 @@ func TestSharedModelCatalogManyToMany(t *testing.T) {
 	found, err := SharedModelForProvider(list[5].ID, flash.Code)
 	require.NoError(t, err)
 	require.Equal(t, flash.Code, found.Code)
+}
+
+func TestSharedPendingContributionDoesNotActivateRelay(t *testing.T) {
+	old := DB
+	db, err := gorm.Open(sqlite.Open("file:shared-admission?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	conn, _ := db.DB()
+	conn.SetMaxOpenConns(1)
+	DB = db
+	t.Cleanup(func() { DB = old; conn.Close() })
+	require.NoError(t, db.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, SharedMigrate())
+	var p SharedProvider
+	require.NoError(t, db.Where("protocol = ?", "chat").First(&p).Error)
+	require.False(t, p.Enabled)
+	require.True(t, p.AcceptContributions)
+	var selected SharedModel
+	require.NoError(t, db.Where("code = ?", "deepseek-flash").First(&selected).Error)
+	require.NoError(t, SharedBindVerifiedModels(p.ID, []SharedModel{selected}))
+	item := SharedContribution{OwnerID: 456, ProviderID: p.ID, Models: "deepseek-flash",
+		DailyLimit: 40000, Ciphertext: "sealed", Fingerprint: "auto-test-only", Enabled: true}
+	require.NoError(t, SharedCreateContribution(&item, p))
+	channel, err := GetChannelById(item.ChannelID, true)
+	require.NoError(t, err)
+	require.NotEqual(t, common.ChannelStatusEnabled, channel.Status)
+	var ability Ability
+	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
+	require.False(t, ability.Enabled)
+	require.NoError(t, SharedSetEnabled(item.OwnerID, item.ID, true, item.DailyLimit, false))
+	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
+	require.False(t, ability.Enabled)
+	require.NoError(t, SharedSetProviderEnabled(p.ID, true))
+	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
+	require.True(t, ability.Enabled)
+	require.NoError(t, SharedSetProviderEnabled(p.ID, false))
+	require.NoError(t, db.Where("channel_id = ?", item.ChannelID).First(&ability).Error)
+	require.False(t, ability.Enabled)
 }

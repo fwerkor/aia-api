@@ -11,6 +11,37 @@ This repository contains the AIA API customizations to [New API](https://github.
 - Shared channels participate in the original New API channel scheduler and `/v1/chat/completions`, alongside administrator channels. Only plain-text chat with an explicit bounded `max_tokens` or `max_completion_tokens` is allowed through contributed keys; ordinary channels remain unchanged. Streaming settlement follows native New API usage accounting.
 - Contributor and administrator can pause/disable channels. The existing New API upstream-failure and auto-ban workflow applies. Contributors can revoke saved ciphertext once no requests are active. Exhausted budgets and disabled providers are filtered from native channel selection.
 
+## Automatic model-to-endpoint verification
+
+The admission flag (`shared_providers.accept_contributions`) is separate from
+the routing flag (`shared_providers.enabled`). The four built-in upstream
+templates accept API-key contributions by default, while routing remains off
+until an administrator reviews the provider terms and model pricing. Disabling
+contribution admission does **not** revoke previously approved routing.
+
+When a user submits an API key, the server:
+
+1. Selects a bounded set of at most eight enabled catalog models matching the
+   endpoint protocol (or the user's explicitly selected models). Explicitly
+   disabled model associations are excluded from automatic probes.
+2. Attempts the upstream `GET /models` API with the supplied credential. An
+   available listing only filters candidates; it is **not proof of access**.
+   If listing is unavailable, the service falls back to direct model probes.
+3. Makes a small, metered text request per candidate through the appropriate
+   Chat Completions, Responses, or Anthropic Messages API, and checks both
+   response content and usage records. Unverified models are not mapped.
+4. Stores only successfully tested associations, encrypts the user key, and
+   creates a standard New API channel exposing the verified models. Individual
+   probe results are returned to the user; credentials are never included.
+5. If the administrator has not enabled routing, the contributed channel stays
+   disabled but the verified contribution is retained. Native forwarding
+   separately rejects models lacking verified catalog/native billing prices.
+
+Each probe may consume the contributor's upstream API balance (at most eight
+short completions per submission). The service cannot discover or test model
+entitlements without a user-provided developer API key. OAuth subscriptions and
+IDE usage allowances are not accepted as credentials.
+
 ## Independent model catalog
 
 Models and endpoints are now separate resources:

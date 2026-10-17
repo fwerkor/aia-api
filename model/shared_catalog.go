@@ -136,6 +136,31 @@ func SharedProviderModels(providerID uint, onlyActive bool) ([]SharedModelBindin
 	return result, nil
 }
 
+func SharedModelCandidates(providerID uint, protocol string) ([]SharedModel, error) {
+	var entries []SharedModel
+	if err := DB.Where("protocol = ? AND enabled = ?", SharedProtocol(protocol), true).
+		Order("id").Limit(8).Find(&entries).Error; err != nil {
+		return nil, err
+	}
+	var bindings []SharedProviderModel
+	if err := DB.Where("provider_id = ?", providerID).Find(&bindings).Error; err != nil {
+		return nil, err
+	}
+	excluded := map[uint]bool{}
+	for _, b := range bindings {
+		if !b.Enabled {
+			excluded[b.ModelID] = true
+		}
+	}
+	result := make([]SharedModel, 0, len(entries))
+	for _, m := range entries {
+		if !excluded[m.ID] {
+			result = append(result, m)
+		}
+	}
+	return result, nil
+}
+
 func SharedProvidersWithModels(onlyActive bool) ([]SharedProviderView, error) {
 	var providers []SharedProvider
 	query := DB.Order("id")
@@ -210,4 +235,33 @@ func SharedBindProviderModel(providerID, modelID uint, enabled bool) error {
 	}
 	row := SharedProviderModel{ProviderID: providerID, ModelID: modelID, Enabled: enabled}
 	return DB.Save(&row).Error
+}
+
+// SharedBindVerifiedModels only records pairs for which a submitted API key
+// successfully completed a real low-output completion call. This operation
+// cannot disable existing mappings or modify any existing contributor channel.
+func SharedBindVerifiedModels(providerID uint, selected []SharedModel) error {
+	if len(selected) == 0 || len(selected) > 12 {
+		return errors.New("no verified models")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var p SharedProvider
+		if err := tx.First(&p, providerID).Error; err != nil {
+			return err
+		}
+		for _, m := range selected {
+			var current SharedModel
+			if err := tx.First(&current, m.ID).Error; err != nil {
+				return err
+			}
+			if !current.Enabled || SharedProtocol(p.Protocol) != SharedProtocol(current.Protocol) {
+				return errors.New("verified model is not enabled for endpoint protocol")
+			}
+			link := SharedProviderModel{ProviderID: providerID, ModelID: current.ID, Enabled: true}
+			if err := tx.Where("provider_id = ? AND model_id = ?", providerID, current.ID).FirstOrCreate(&link).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

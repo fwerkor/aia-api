@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,6 +64,12 @@ func PrepareNativeShare(c *gin.Context, info *relaycommon.RelayInfo, channel *mo
 	selected, lookupErr := model.SharedModelForProvider(provider.ID, requestModel.Model)
 	if lookupErr != nil {
 		return "", types.NewError(errors.New("model not linked to selected endpoint"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	nativePrice, hasPrice := ratio_setting.GetModelPrice(selected.Code, false)
+	nativeRatio, hasRatio, _ := ratio_setting.GetModelRatio(selected.Code)
+	if selected.InputPrice <= 0 || selected.OutputPrice <= 0 ||
+		((!hasPrice || nativePrice <= 0) && (!hasRatio || nativeRatio <= 0)) {
+		return "", types.NewError(errors.New("shared model pricing is not configured"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	quote := provider
 	quote.Model = selected.Code

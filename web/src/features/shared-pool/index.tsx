@@ -27,6 +27,7 @@ type Provider = {
   output_price: number;
   max_output: number;
   enabled: boolean;
+  accept_contributions: boolean;
 };
 type Contribution = {
   id: number;
@@ -62,6 +63,10 @@ export function SharedPool() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [autoProbe, setAutoProbe] = useState(true);
+  const [probeResults, setProbeResults] = useState<
+    { code: string; verified: boolean; reason?: string }[]
+  >([]);
   const [modelToBind, setModelToBind] = useState<Record<number, string>>({});
   const [adminProviders, setAdminProviders] = useState<Provider[]>([]);
   const [adminCatalog, setAdminCatalog] = useState<CatalogModel[]>([]);
@@ -196,7 +201,7 @@ export function SharedPool() {
             <h2 className="text-lg font-semibold">贡献 API Key</h2>
             {providers.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                管理员尚未启用共享 Endpoint。
+                暂无允许贡献的 Endpoint。
               </p>
             )}
             <form
@@ -204,15 +209,16 @@ export function SharedPool() {
               onSubmit={(e) => {
                 e.preventDefault();
                 void mutate(async () => {
-                  await api.post("/api/shared/contributions", {
+                  const response = await api.post("/api/shared/contributions", {
                     provider_id: Number(providerID),
-                    models: selectedModels,
+                    models: autoProbe ? [] : selectedModels,
                     key,
                     daily_limit: Math.round(Number(dailyLimit) * 500_000),
                   });
+                  setProbeResults(response.data.probes ?? []);
                   setKey("");
                   setSelectedModels([]);
-                }, "Key 已通过实际模型调用验证并加入共享池");
+                }, "验证完成：已将验证通过的模型和贡献 Key 加入共享池。");
               }}
             >
               <label className={labelStyle}>
@@ -229,36 +235,57 @@ export function SharedPool() {
                   <option value="">请选择</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name}
+                      {p.name}{" "}
+                      {p.enabled
+                        ? "（已开放调用）"
+                        : "（接受贡献，待开放调用）"}
                     </option>
                   ))}
                 </select>
               </label>
               <div className="md:col-span-2 space-y-2">
-                <p className={labelStyle}>
-                  允许该 Key 贡献的模型（可多选，逐个实际调用验证）
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={autoProbe}
+                    onChange={(e) => setAutoProbe(e.target.checked)}
+                  />
+                  自动检测该 Endpoint 可调用的模型并建立关联
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  先尝试查询模型列表，再对候选模型实际发送小型验证请求；每次最多测试八个模型，会消耗少量上游
+                  Token。 仅验证成功的模型加入贡献
+                  Channel，模型目录存在并不代表有调用权限。
                 </p>
-                {(
-                  providers.find((p) => String(p.id) === providerID)?.models ??
-                  []
-                ).map((m) => (
-                  <label key={m.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={selectedModels.includes(m.code)}
-                      onChange={(e) =>
-                        setSelectedModels((prev) =>
-                          e.target.checked
-                            ? [...prev, m.code]
-                            : prev.filter((id) => id !== m.code),
-                        )
-                      }
-                    />
-                    {m.name}{" "}
-                    <span className="text-muted-foreground">({m.code})</span>
-                  </label>
-                ))}
-                {providerID &&
+                {!autoProbe && (
+                  <p className={labelStyle}>手动指定要验证的模型：</p>
+                )}
+                {!autoProbe &&
+                  (
+                    providers.find((p) => String(p.id) === providerID)
+                      ?.models ?? []
+                  ).map((m) => (
+                    <label
+                      key={m.id}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedModels.includes(m.code)}
+                        onChange={(e) =>
+                          setSelectedModels((prev) =>
+                            e.target.checked
+                              ? [...prev, m.code]
+                              : prev.filter((id) => id !== m.code),
+                          )
+                        }
+                      />
+                      {m.name}{" "}
+                      <span className="text-muted-foreground">({m.code})</span>
+                    </label>
+                  ))}
+                {!autoProbe &&
+                  providerID &&
                   !providers.find((p) => String(p.id) === providerID)?.models
                     .length && (
                     <p className="text-sm text-muted-foreground">
@@ -295,7 +322,7 @@ export function SharedPool() {
                   disabled={
                     busy ||
                     providers.length === 0 ||
-                    selectedModels.length === 0
+                    (!autoProbe && selectedModels.length === 0)
                   }
                   type="submit"
                 >
@@ -304,6 +331,17 @@ export function SharedPool() {
               </div>
             </form>
           </section>
+          {probeResults.length > 0 && (
+            <section className="rounded-xl border p-5 space-y-2">
+              <h2 className="text-lg font-semibold">最近一次模型探测结果</h2>
+              {probeResults.map((r) => (
+                <div key={r.code} className="text-sm">
+                  {r.code} —{" "}
+                  {r.verified ? "实际调用验证成功" : r.reason || "未通过验证"}
+                </div>
+              ))}
+            </section>
+          )}
           <section className="rounded-xl border p-5 space-y-3">
             <h2 className="text-lg font-semibold">我的贡献</h2>
             {contributions.length === 0 && (
@@ -698,7 +736,8 @@ export function SharedPool() {
               {adminProviders.map((p) => (
                 <div key={p.id} className="space-y-2 border-t py-3 text-sm">
                   <div className="font-medium">
-                    {p.name}（{p.enabled ? "已启用" : "未启用"}）
+                    {p.name}（{p.enabled ? "调用已开放" : "调用未开放"}，
+                    {p.accept_contributions ? "允许贡献" : "已停止贡献"}）
                   </div>
                   <p className="text-muted-foreground">
                     {p.base_url} · {p.protocol}
@@ -767,6 +806,22 @@ export function SharedPool() {
                       }
                     >
                       取消关联
+                    </Button>
+                    <Button
+                      disabled={busy}
+                      variant="outline"
+                      onClick={() =>
+                        void mutate(
+                          () =>
+                            api.put("/api/shared/admin/providers/" + p.id, {
+                              enabled: p.enabled,
+                              accept_contributions: !p.accept_contributions,
+                            }),
+                          "贡献准入状态已更新",
+                        )
+                      }
+                    >
+                      {p.accept_contributions ? "停止接收贡献" : "开放接收贡献"}
                     </Button>
                     <Button
                       disabled={busy}
