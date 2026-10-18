@@ -1,8 +1,8 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: 使用文档 / Documentation
-    url: https://docs.newapi.ai/
-    about: 提交 issue 前请先查阅文档，确认现有说明无法解决你的问题。
-  - name: 使用问题 / Usage Questions
-    url: https://deepwiki.com/QuantumNous/new-api
-    about: 使用、配置、接入等问题请优先在 DeepWiki 查询或提问。
+  - name: AIA API 使用与部署文档
+    url: https://github.com/fwerkor/aia-api/blob/main/docs/README.md
+    about: 使用、贡献密钥、部署、登录与接口说明
+  - name: 私密安全漏洞报告
+    url: https://github.com/fwerkor/aia-api/security/advisories/new
+    about: 请勿在公开 Issue 中发布漏洞利用方法或密钥

@@ -5,9 +5,9 @@ This repository contains the AIA API customizations to [New API](https://github.
 ## What it does
 
 - An administrator creates HTTPS endpoint/model templates with a verified per-million-token price and maximum output cap. Newly added templates start disabled. **Only permit models/providers whose contract expressly allows the proposed proxy/sharing use**; working credentials alone do not indicate permission.
-- Users sign in through the existing New API account system, submit their own upstream credentials, and have them automatically verified with a minimal real completion. Credentials use AES-256-GCM encryption at rest and keyed SHA-256 fingerprints to prevent duplicates; other users and ordinary account APIs never receive them.
-- Per-contribution daily USD-equivalent budgets are pre-reserved inside a database transaction. The shared contributions join native New API channels and the reward is credited to the original users.quota wallet after native settlement.
-- All clients retain the existing New API-issued token, original `/v1` API URL and `users.quota` wallet. New API alone deducts consumer quota and writes native usage logs; a successful native settlement atomically awards the corresponding quota to the contributor. An idempotent grant is available to root administrators.
+- Users sign in through AIA Forum OIDC (native password sign-up/login disabled), submit their own upstream credentials, and have them automatically verified with a minimal real completion. Credentials use AES-256-GCM encryption at rest and keyed SHA-256 fingerprints to prevent duplicates; other users and ordinary account APIs never receive them.
+- Per-contribution daily budgets in native quota units are pre-reserved inside a database transaction. The shared contributions join native New API channels and the reward is credited to the original users.quota wallet after native settlement.
+- All clients use AIA API-issued platform tokens, the compatible `/v1` API URL and inherited `users.quota` wallet. The native accounting pipeline deducts consumer quota and writes native usage logs; a successful native settlement atomically awards the corresponding quota to the contributor. An idempotent grant is available to root administrators.
 - Shared channels participate in the original New API channel scheduler and `/v1/chat/completions`, alongside administrator channels. Only plain-text chat with an explicit bounded `max_tokens` or `max_completion_tokens` is allowed through contributed keys; ordinary channels remain unchanged. Streaming settlement follows native New API usage accounting.
 - Contributor and administrator can pause/disable channels. The existing New API upstream-failure and auto-ban workflow applies. Contributors can revoke saved ciphertext once no requests are active. Exhausted budgets and disabled providers are filtered from native channel selection.
 
@@ -77,7 +77,7 @@ References: [OpenCode Zen](https://docs.opencode.ai/docs/zen/), [OpenAI API mode
 
 ## Deployment
 
-The original New API backend/frontend dependencies are still required. To build locally:
+The inherited Go/React backend/frontend toolchain is still required. To build locally:
 
 ```bash
 cd web
@@ -86,7 +86,7 @@ bun --bun run typecheck
 bun --bun run build
 cd ..
 go test ./...
-CGO_ENABLED=0 go build -o new-api .
+CGO_ENABLED=0 go build -o aia-api .
 ```
 
 Set the `AIA_SHARED_SECRET` environment variable **only on the server** to a persistent random 32-byte key represented as 64 hex characters:
@@ -97,7 +97,7 @@ openssl rand -hex 32
 
 Do not commit the output or put it in Compose YAML, CI logs, or source. Store it in the server's secret management or mode-0600 `.env` file. The Compose file accepts `AIA_SHARED_SECRET` from the deployment environment. Never rotate the secret without first migrating/encrypting saved credentials: an old ciphertext cannot be read under a different key. Without the setting, sharing endpoints remain unavailable, but the ordinary New API service still starts.
 
-Existing New API migrations create `shared_providers`, `shared_contributions` and `shared_charges` for endpoint allowlisting, encrypted credentials and idempotent budget/reward records; the old `shared_accounts` table is not used by this version. Back up the DB and verify upgrade/rollback before production changes.
+The project migrations create `shared_providers`, `shared_contributions` and `shared_charges` for endpoint allowlisting, encrypted credentials and idempotent budget/reward records; the old `shared_accounts` table is not used by this version. Back up the DB and verify upgrade/rollback before production changes.
 
 After login, open `/shared-pool` for contribution controls. Root administrators can add, enable, and disable provider templates and issue small bootstrap grants. For shared API calls:
 
@@ -105,7 +105,7 @@ After login, open `/shared-pool` for contribution controls. Root administrators 
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="YOUR_PLATFORM_NEW_API_TOKEN",
+    api_key="YOUR_AIA_API_TOKEN",
     base_url="https://api.nju-aia.com/v1",
 )
 print(client.chat.completions.create(
@@ -119,7 +119,7 @@ print(client.chat.completions.create(
 
 - Endpoints are administrator-defined, HTTPS-only and subject to public-IP DNS checks to reduce SSRF risk. Redirects are not followed. Upstream traffic can expose request content to a contributor's provider; never send sensitive content through untrusted providers.
 - Shares must be explicitly opted into, with a daily budget. Tokens are limited to text chat, bounded input, bounded max output, the model selected by administrators, and user platform-token model/IP restrictions.
-- The common wallet uses native New API quota units (nominally 500,000 quota = $1). Administrators must configure a **positive native model price or ratio** before enabling shared endpoints. The specified upstream input/output prices are used only for conservative contribution-budget reservation, not as a separate consumer pricing engine. Actual rewards follow New API's settled consumption quota; matching the upstream's invoice must be checked by the operator.
+- The common wallet uses the inherited native quota units (nominally 500,000 quota = $1). Administrators must configure a **positive native model price or ratio** before enabling shared endpoints. The specified upstream input/output prices are used only for conservative contribution-budget reservation, not as a separate consumer pricing engine. Actual rewards follow New API's settled consumption quota; matching the upstream's invoice must be checked by the operator.
 - Failed relay attempts release the contribution-budget reservation. Native successful settlement credits the contributor wallet once per unique attempt ID; budget reservations are transactional and bounded. A native charge exceeding the reserved bound is capped for contributor rewards and should trigger administrator review of model pricing; upstream invoices are independent of proxy quota. External provider changes and server failures still require operator reconciliation.
 - Only root administrators may grant native wallet quota using an idempotent reference. Ordinary users cannot mint credits or withdraw cash. Five previously active subscriptions and old wallet balances are deliberately preserved; the old subscription preference logic remains compatible.
 
@@ -136,7 +136,7 @@ Based on the New API project at https://github.com/QuantumNous/new-api (base rev
 - Account creation and login are through the configured **AIA Forum OIDC** provider. The native password/sign-up endpoints and pages are disabled; forum first-login account provisioning remains available.
 - Commercial top-ups, online payment gateways/webhooks, invite kickbacks, daily check-ins and commercial subscription purchases are removed. Existing subscription usage rights and historic database records remain intact.
 - **Redemption codes remain supported** through the existing `POST /api/user/topup` redemption handler and the `/wallet` balance/redeem page.
-- The 11 model IDs in the shared catalogue are the native New API default model pricing set. Display names are not required. Prices are reference rounded **CNY per million input/output tokens**, with the native 500,000 quota-unit denominator preserved for existing accounts. Default accounting uses a nominal 7 CNY per USD historical unit.
+- The 11 model IDs in the shared catalogue are the AIA API default model pricing set. Display names are not required. Prices are reference rounded **CNY per million input/output tokens**, with the native 500,000 quota-unit denominator preserved for existing accounts. Default accounting uses a nominal 7 CNY per USD historical unit.
 - Quota exhaustion or 429 responses temporarily cool down a contributed channel for 5–30 minutes. It is automatically eligible again after the cooldown; the credential is not permanently disabled on transient lack of quota.
 - [OpenCode Go](https://docs.opencode.ai/docs/go/) is the confirmed official subscription endpoint at `https://opencode.ai/zen/go/v1`, using the user's Go plan API key. The catalogue `deepseek-flash` model maps to OpenCode Go's `deepseek-v4.1-flash` model ID. No browser cookies or IDE refresh tokens are accepted.
 - New API separately has a built-in Codex OAuth channel adapter. Linking third-party subscription/OAuth accounts to shared-key contribution requires a provider-supported authorization flow; an ordinary OpenAI API endpoint is not equivalent to Codex, Claude Code, or Antigravity subscriptions. Do not treat those API endpoints as subscription usage.

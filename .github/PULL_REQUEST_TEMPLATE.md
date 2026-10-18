@@ -1,4 +1,4 @@
-# ⚠️ 提交说明 / PR Notice
+# AIA API — PR 提交说明 / PR Notice
 > [!IMPORTANT]
 >
 > - 请提供**人工撰写**的简洁摘要，避免直接粘贴未经整理的 AI 输出。
@@ -17,7 +17,7 @@
 
 ## ✅ 提交前检查项 / Checklist
 - [ ] **人工确认:** 我已亲自整理并撰写此描述，没有直接粘贴未经处理的 AI 输出。
-- [ ] **非重复提交:** 我已搜索现有的 [Issues](https://github.com/QuantumNous/new-api/issues) 与 [PRs](https://github.com/QuantumNous/new-api/pulls)，确认不是重复提交。
+- [ ] **非重复提交:** 我已搜索现有的 [Issues](https://github.com/fwerkor/aia-api/issues) 与 [PRs](https://github.com/fwerkor/aia-api/pulls)，确认不是重复提交。
 - [ ] **Bug fix 说明:** 若此 PR 标记为 `Bug fix`，我已提交或关联对应 Issue，且不会将设计取舍、预期不一致或理解偏差直接归类为 bug。
 - [ ] **变更理解:** 我已理解这些更改的工作原理及可能影响。
 - [ ] **范围聚焦:** 本 PR 未包含任何与当前任务无关的代码改动。

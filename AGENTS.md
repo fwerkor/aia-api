@@ -1,10 +1,10 @@
-# AGENTS.md — Project Conventions for new-api
+# AGENTS.md — Project Conventions for AIA API
 
 DO NOT send optional commentary
 
 ## Overview
 
-This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard.
+AIA API is an AGPL-licensed derivative of New API (its Go module path intentionally retains the upstream name). This Go and React project serves the AIA Forum OIDC community, a restricted independent model catalog, unified quota wallet and a contributed developer API-key pool. Some inherited channel adapters remain for compatibility, but cash payment, native password sign-up/login and subscription purchases are outside the AIA user product. See README.md, docs/README.md and AIA-SHARED-POOL.md before making changes.
 
 ## Tech Stack
 
@@ -12,7 +12,7 @@ This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI pro
 - **Frontend**: React 19, TypeScript, Rsbuild, Base UI, Tailwind CSS
 - **Databases**: SQLite, MySQL, PostgreSQL (all three must be supported)
 - **Cache**: Redis (go-redis) + in-memory cache
-- **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
+- **Auth**: AIA Forum OIDC for user sign-in; JWT sessions, passkeys/2FA code paths retained for account security
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
 
 ## Architecture

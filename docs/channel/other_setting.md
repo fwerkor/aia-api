@@ -1,41 +1,23 @@
-# 渠道额外设置说明
+# AIA API 管理员：原生渠道额外设置
 
-该配置用于设置一些额外的渠道参数，可以通过 JSON 对象进行配置。主要包含以下三个设置项：
+本设置继承自底层兼容渠道，用于 **管理员手动配置的原生渠道**，不是 `/shared-pool` 用户贡献密钥的自定义端点配置。共享端点有额外的 HTTPS、防 SSRF 与验证约束，不能通过此处绕过。
 
-1. force_format
-    - 用于标识是否对数据进行强制格式化为 OpenAI 格式
-    - 类型为布尔值，设置为 true 时启用强制格式化
+支持的常用 JSON 选项：
 
-2. proxy
-    - 用于配置网络代理
-    - 类型为字符串，支持 `http`、`https`、`socks5` 和 `socks5h` 协议
-    - 保存时必须包含协议和主机；仅允许空路径或根路径 `/`，不允许 query 或 fragment
-    - SOCKS 代理未填写端口时，运行时使用默认端口 `1080`
-
-3. thinking_to_content
-   - 用于标识是否将思考内容`reasoning_content`转换为`<think>`标签拼接到内容中返回
-   - 类型为布尔值，设置为 true 时启用思考内容转换
-
---------------------------------------------------------------
-
-## JSON 格式示例
-
-以下是一个示例配置，启用强制格式化并设置了代理地址：
+| 字段 | 类型 | 作用 |
+| --- | --- | --- |
+| `force_format` | boolean | 按原生渠道适配器规则强制格式化 OpenAI 兼容输出 |
+| `thinking_to_content` | boolean | 将 `reasoning_content` 整理到 `<think>` 标记 |
+| `proxy` | string | 原生渠道的出站代理 URL，支持 `http`、`https`、`socks5`、`socks5h` |
 
 ```json
 {
-    "force_format": true,
-    "thinking_to_content": true,
-    "proxy": "socks5://proxy.example:1080"
+  "force_format": true,
+  "thinking_to_content": false,
+  "proxy": "socks5://proxy.example:1080"
 }
 ```
 
---------------------------------------------------------------
+代理 URL 保存时必须含协议和主机，不得含 query/fragment，path 只能为空或 `/`；SOCKS 默认端口为 1080。历史数据可能含无效后缀，旧配置在运行时会忽略后缀并产生脱敏警告，但再次编辑保存时需修正。拨号/KeepAlive 超时均为 30 秒，TLS 握手超时 10 秒。
 
-通过调整上述 JSON 配置中的值，可以灵活控制渠道的额外行为，比如是否进行格式化以及使用特定的网络代理。
-
-## 升级兼容性
-
-旧版本会忽略代理地址中的 path、query 和 fragment。为避免升级后中断已有渠道流量，运行时会继续剥离这些遗留后缀，并对同一代理地址每个进程记录一次不含凭证和后缀的警告。该兼容逻辑不会改写数据库；再次保存渠道时必须按上述严格规则修正代理地址。
-
-代理连接使用 30 秒 TCP 拨号超时和 30 秒 KeepAlive；TLS 握手超时为 10 秒。这些超时同样适用于未配置渠道代理的中转请求。
+普通用户使用 AIA API 不需要配置这些参数；详见 [用户指南](../usage.md) 和 [共享池实现](../../AIA-SHARED-POOL.md)。

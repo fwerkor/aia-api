@@ -38,7 +38,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement at:
 
-**Email:** support@quantumnous.com
+**Report:** https://github.com/fwerkor/aia-api/security/advisories/new (for private security reports); https://github.com/fwerkor/aia-api/issues (for public conduct concerns without personal information)
 
 All complaints will be reviewed and investigated promptly and fairly.
 

@@ -1,4 +1,8 @@
-# 用户鉴权与登录会话
+# AIA API 身份认证与会话安全
+
+> **当前产品范围（AIA 部署）**：AIA API 只通过配置的 **AIA Forum OIDC** 接入网页用户，不开放 New API 的密码注册/登录以及其他社交登录流程。本文保留部分继承代码的会话协议、Passkey/2FA 组件和内部分支设计，用于维护和安全审计；文中涉及 password/WeChat/Telegram 的实现示例不代表 AIA 网页提供这些登录入口。Token API `/v1` 使用平台签发的 API Token，不等于浏览器的登录 Session。
+
+## 用户鉴权与登录会话
 
 面板鉴权采用短期 Access Token、HttpOnly Refresh Cookie 与服务端登录会话控制面的组合。面板请求不再依赖 Gin session，也不再要求 `New-Api-User` 请求头。
 
@@ -28,7 +32,7 @@
 
 ## 浏览器接口
 
-登录成功后，密码登录、2FA、Passkey、OAuth、WeChat 和 Telegram 登录均返回统一数据：
+AIA Forum OIDC 登录成功后，认证模块返回如下会话结构。其他历史适配器的底层数据结构与此兼容，但不作为 AIA 的登录选项：
 
 ```json
 {
@@ -41,7 +45,7 @@
     "session": {
       "sid": "...",
       "current": true,
-      "login_method": "password",
+      "login_method": "oauth:oidc",
       "ip": "...",
       "user_agent": "...",
       "created_at": 1730000000,
