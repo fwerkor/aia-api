@@ -26,6 +26,7 @@ const (
 // Model unit costs are maintained in CNY per million tokens.
 // New API internally uses 500000 quota per 7 CNY for compatibility.
 var defaultModelRatio = map[string]float64{
+	"default":           0.068493150685,
 	"deepseek-flash":    2.0 / 14,
 	"deepseek-v4-pro":   9.0 / 14,
 	"gpt-6.1-sol":       14.0 / 14,
@@ -64,6 +65,7 @@ var modelRatioMap = types.NewRWMap[string, float64]()
 var completionRatioMap = types.NewRWMap[string, float64]()
 
 var defaultCompletionRatio = map[string]float64{
+	"default":        1.999981,
 	"deepseek-flash": 4, "deepseek-v4-pro": 28.0 / 9,
 	"gpt-6.1-sol": 5, "gpt-6-sol": 5, "gpt-6-luna": 4,
 	"claude-sonnet-4-6": 5, "claude-opus-4-8": 5,
