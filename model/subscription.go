@@ -861,6 +861,21 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs), nil
 }
 
+// HasActiveUserSubscriptionForPlan checks a time-bounded grant without relying on
+// the subscription expiry background job. This is used by concurrency admission.
+func HasActiveUserSubscriptionForPlan(userId, planId int) (bool, error) {
+	if userId <= 0 || planId <= 0 {
+		return false, nil
+	}
+	now := common.GetTimestamp()
+	var count int64
+	err := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND plan_id = ? AND status = ? AND start_time <= ? AND end_time > ?",
+			userId, planId, "active", now, now).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // HasActiveUserSubscription returns whether the user has any active subscription.
 // This is a lightweight existence check to avoid heavy pre-consume transactions.
 func HasActiveUserSubscription(userId int) (bool, error) {
